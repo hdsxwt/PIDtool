@@ -6,6 +6,7 @@ from pidtool.core.experiments import (
     ExperimentRunner,
     ExperimentScript,
     ExperimentStep,
+    autotune_step_script,
     disturbance_script,
     step_response_script,
 )
@@ -153,3 +154,16 @@ def test_builtin_scripts_structure():
     assert labels == [MARK_DISTURB_START, MARK_DISTURB_END]
     manual = [s for s in dist.steps if s.kind == "prompt" and s.params.get("manual")]
     assert len(manual) == 1
+
+
+def test_autotune_step_script_structure():
+    script = autotune_step_script(2.0, baseline_sp=0.0)
+    assert script.name == "自动调参阶跃"
+    setpoints = [
+        s.params.get("value")
+        for s in script.steps
+        if s.kind == "command" and s.params.get("cmd") == "setpoint"
+    ]
+    assert setpoints == [0.0, 2.0]
+    kinds = [s.kind for s in script.steps]
+    assert kinds.index("collect_start") < kinds.index("prompt") < kinds.index("mark")

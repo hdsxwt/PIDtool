@@ -57,8 +57,11 @@ def test_second_order_step():
 
 def test_sustained_oscillation_flagged():
     t = np.arange(0.0, 4.0, 0.001)
-    envelope = 1.0 - np.exp(-t / 0.05)
-    y = envelope * (1.0 + 0.2 * np.sin(2.0 * np.pi * 5.0 * t + 0.3))
+    y = np.zeros_like(t)
+    mask = t >= 0.2
+    ts = t[mask] - 0.2
+    envelope = 1.0 - np.exp(-ts / 0.05)
+    y[mask] = envelope * (1.0 + 0.2 * np.sin(2.0 * np.pi * 5.0 * ts + 0.3))
     m = analyze_step(t, y, 1.0)
     assert m is not None
     assert m.oscillating
@@ -67,10 +70,19 @@ def test_sustained_oscillation_flagged():
 
 def test_steady_error_detected():
     t = np.arange(0.0, 1.0, 0.001)
-    y = 0.9 * (1.0 - np.exp(-t / 0.05))
+    y = np.zeros_like(t)
+    mask = t >= 0.2
+    y[mask] = 0.9 * (1.0 - np.exp(-(t[mask] - 0.2) / 0.05))
     m = analyze_step(t, y, 1.0)
     assert m is not None
     assert abs(m.steady_error - 0.1) < 5e-3
+
+
+def test_noise_only_returns_none():
+    rng = np.random.default_rng(0)
+    t = np.arange(0.0, 1.0, 0.001)
+    y = 1.0 + 0.002 * rng.standard_normal(t.size)
+    assert analyze_step(t, y, 1.0) is None
 
 
 def test_negative_step():

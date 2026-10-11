@@ -2,20 +2,25 @@ from __future__ import annotations
 
 import copy
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 from serial.tools import list_ports
 
+from pidtool.ai.llm import DeepSeekTuner
+from pidtool.ai.tuner import AutoTuner
 from pidtool.app_config import AppConfig
 from pidtool.core.experiments import (
     ExperimentRunner,
     ExperimentScript,
+    autotune_step_script,
     disturbance_script,
     step_response_script,
 )
-from pidtool.core.experiments.specs import MARK_DISTURB_END, MARK_DISTURB_START
+from pidtool.core.experiments.specs import MARK_DISTURB_END, MARK_DISTURB_START, MARK_STEP
+from pidtool.core.export import export_artifacts
 from pidtool.core.metrics import StepMetrics, analyze_disturbance, analyze_step
 from pidtool.link.mock_link import MockLink
 from pidtool.link.protocol import MODE_IDLE, MODE_RUN, load_adapter
@@ -43,6 +48,18 @@ def _fmt_sec(value: float) -> str:
     return f"{value:.4f} s"
 
 
+def _fmt_num(value, spec: str) -> str:
+    if value is None:
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if number != number or number in (float("inf"), float("-inf")):
+        return "—"
+    return format(number, spec)
+
+
 def _json_number(value: float) -> float | None:
     if value != value:
         return None
@@ -62,10 +79,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self._capture_sp = 1.0
         self._capturing = False
         self.runner = ExperimentRunner(self._on_experiment_event)
+        self.tuner = AutoTuner(self._on_tuner_event)
         self._script_marks: list[tuple[float, str]] = []
         self._script_kind = ""
         self._prompt_text = ""
         self._prompt_manual = False
+        self._last_metrics: dict | None = None
+        self._trial_records: list[dict] = []
+        self._ai_settle_s = 2.0
+        self._ai_countdown_s = 3.0
 
         self._build_toolbar()
         self._build_body()
@@ -159,10 +181,15 @@ class MainWindow(QtWidgets.QMainWindow):
         row.addWidget(self._build_experiment_group())
         row.addWidget(self._build_script_group())
         row.addWidget(self._build_metrics_group())
-        splitter.addWidget(controls)
+
+        self.bottom_tabs = QtWidgets.QTabWidget()
+        self.bottom_tabs.addTab(controls, "实验")
+        self.bottom_tabs.addTab(self._build_ai_tab(), "AI 调参")
+        self.bottom_tabs.addTab(self._build_history_tab(), "历史")
+        splitter.addWidget(self.bottom_tabs)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([600, 220])
+        splitter.setSizes([560, 280])
 
     def _build_gains_group(self) -> QtWidgets.QGroupBox:
         group = QtWidgets.QGroupBox("PID 参数（在线下发）")
@@ -281,6 +308,108 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addStretch(1)
         return group
 
+    def _build_ai_tab(self) -> QtWidgets.QWidget:
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(tab)
+
+        left = QtWidgets.QVBoxLayout()
+        exp_group = QtWidgets.QGroupBox("自动调参")
+        exp_form = QtWidgets.QFormLayout(exp_group)
+        self.ai_target_spin = QtWidgets.QDoubleSpinBox()
+        self.ai_target_spin.setDecimals(4)
+        self.ai_target_spin.setRange(-100000.0, 100000.0)
+        self.ai_target_spin.setValue(2.0)
+        self.ai_iters_spin = QtWidgets.QSpinBox()
+        self.ai_iters_spin.setRange(1, 50)
+        self.ai_iters_spin.setValue(8)
+        self.ai_measure_spin = QtWidgets.QDoubleSpinBox()
+        self.ai_measure_spin.setRange(0.5, 120.0)
+        self.ai_measure_spin.setValue(4.0)
+        self.ai_measure_spin.setDecimals(1)
+        self.ai_measure_spin.setSuffix(" s")
+        exp_form.addRow("目标设定值", self.ai_target_spin)
+        exp_form.addRow("最大轮数", self.ai_iters_spin)
+        exp_form.addRow("单轮观测时长", self.ai_measure_spin)
+        button_row = QtWidgets.QHBoxLayout()
+        self.ai_start_btn = QtWidgets.QPushButton("开始自动调参")
+        self.ai_start_btn.clicked.connect(self._start_autotune)
+        self.ai_abort_btn = QtWidgets.QPushButton("中止")
+        self.ai_abort_btn.setEnabled(False)
+        self.ai_abort_btn.clicked.connect(self._abort_autotune)
+        button_row.addWidget(self.ai_start_btn)
+        button_row.addWidget(self.ai_abort_btn)
+        exp_form.addRow(button_row)
+        left.addWidget(exp_group)
+
+        llm_group = QtWidgets.QGroupBox("DeepSeek 设置（保存在全局配置，不写入固件目录）")
+        llm_form = QtWidgets.QFormLayout(llm_group)
+        self.llm_base_edit = QtWidgets.QLineEdit()
+        self.llm_model_edit = QtWidgets.QLineEdit()
+        self.llm_key_edit = QtWidgets.QLineEdit()
+        self.llm_key_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        llm_form.addRow("Base URL", self.llm_base_edit)
+        llm_form.addRow("模型", self.llm_model_edit)
+        llm_form.addRow("API Key", self.llm_key_edit)
+        llm_save_btn = QtWidgets.QPushButton("保存 LLM 设置")
+        llm_save_btn.clicked.connect(self._save_llm_settings)
+        llm_form.addRow(llm_save_btn)
+        left.addWidget(llm_group)
+        left.addStretch(1)
+        layout.addLayout(left)
+
+        right = QtWidgets.QVBoxLayout()
+        self.ai_log = QtWidgets.QTableWidget(0, 8)
+        self.ai_log.setHorizontalHeaderLabels(
+            ["轮次", "Kp", "Ki", "Kd", "评分", "超调%", "调节(s)", "备注"]
+        )
+        self.ai_log.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        self.ai_log.verticalHeader().setVisible(False)
+        self.ai_log.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.ai_log.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
+        self.ai_status = QtWidgets.QLabel("就绪：填写 API Key 后可开始自动调参")
+        right.addWidget(self.ai_log, 1)
+        right.addWidget(self.ai_status)
+        layout.addLayout(right, 1)
+
+        self._load_llm_settings_into_ui()
+        return tab
+
+    def _build_history_tab(self) -> QtWidgets.QWidget:
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(tab)
+        self.trials_table = QtWidgets.QTableWidget(0, 10)
+        self.trials_table.setHorizontalHeaderLabels(
+            ["时间", "类型", "Kp", "Ki", "Kd", "超调%", "上升(s)", "调节(s)", "稳态误差", "恢复(s)"]
+        )
+        self.trials_table.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        self.trials_table.verticalHeader().setVisible(False)
+        self.trials_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.trials_table.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.trials_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.SingleSelection
+        )
+        layout.addWidget(self.trials_table, 1)
+
+        button_row = QtWidgets.QHBoxLayout()
+        refresh_btn = QtWidgets.QPushButton("刷新")
+        refresh_btn.clicked.connect(self._refresh_trials_table)
+        export_sel_btn = QtWidgets.QPushButton("导出选中为 config.json / .h")
+        export_sel_btn.clicked.connect(self._export_selected_trial)
+        export_cur_btn = QtWidgets.QPushButton("导出当前参数")
+        export_cur_btn.clicked.connect(self._export_current)
+        button_row.addWidget(refresh_btn)
+        button_row.addWidget(export_sel_btn)
+        button_row.addWidget(export_cur_btn)
+        button_row.addStretch(1)
+        layout.addLayout(button_row)
+        return tab
+
     def _build_statusbar(self) -> None:
         sb = self.statusBar()
         self.lbl_state = QtWidgets.QLabel("未连接")
@@ -358,6 +487,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_workspace_combo(str(root))
         settings = workspace.load_settings()
         self._apply_settings_to_ui(settings)
+        self._refresh_trials_table()
         self._status(f"已加载工作目录 {root}")
 
     def _apply_settings_to_ui(self, settings: dict) -> None:
@@ -474,6 +604,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _disconnect(self) -> None:
         if self.runner.active:
             self.runner.abort()
+        if self.tuner.active:
+            self.tuner.abort()
         self.banner.hide()
         self.banner_confirm.hide()
         if self.link is not None:
@@ -586,6 +718,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.runner.active:
             self._status("实验运行中，采集由实验脚本控制")
             return
+        if self.tuner.active:
+            self._status("自动调参进行中，请先中止")
+            return
         if not self._ensure_link():
             return
         if self._capturing:
@@ -632,19 +767,24 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._set_metrics_rows(self._step_metric_rows(metrics))
         self._status("指标计算完成")
+        self._last_metrics = self._step_metrics_dict(metrics)
         if self.workspace is not None:
             self.workspace.append_trial(
                 {
                     "kind": "manual_step",
                     "setpoint": float(self._capture_sp),
                     "gains": self._gains_dict(),
-                    "metrics": self._step_metrics_dict(metrics),
+                    "metrics": self._last_metrics,
                     "capture_s": float(t[-1] - self._capture_t0),
                 }
             )
+            self._refresh_trials_table()
 
     def _start_experiment(self, kind: str) -> None:
         if not self._ensure_link():
+            return
+        if self.tuner.active:
+            self._status("自动调参进行中，请先中止")
             return
         if self.runner.active:
             self._status("已有实验在运行")
@@ -671,10 +811,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self._status("当前没有运行中的实验")
 
     def _set_script_ui(self, active: bool) -> None:
-        self.step_exp_btn.setEnabled(not active)
-        self.disturb_exp_btn.setEnabled(not active)
+        busy = active or self.tuner.active
+        self.step_exp_btn.setEnabled(not busy)
+        self.disturb_exp_btn.setEnabled(not busy)
         self.abort_exp_btn.setEnabled(active)
-        self.capture_btn.setEnabled(not active)
+        self.capture_btn.setEnabled(not busy)
 
     def _on_banner_confirm(self) -> None:
         self.runner.confirm()
@@ -726,6 +867,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._stop_capture()
             self._status("实验已中止")
             self._set_script_ui(False)
+            if self.tuner.active:
+                self.tuner.abort()
 
     def _run_script_command(self, data: dict) -> None:
         cmd = data.get("cmd")
@@ -797,6 +940,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 "marks": [{"t": mt, "label": label} for mt, label in self._script_marks],
             }
         else:
+            marks = {label: mt for mt, label in self._script_marks}
+            step_t = marks.get(MARK_STEP)
+            if step_t is not None:
+                start = max(float(tt[0]), float(step_t) - 0.3)
+                keep = tt >= start
+                tt = tt[keep]
+                yy = yy[keep]
             m = analyze_step(tt, yy, self._capture_sp)
             if m is None:
                 self._status("阶跃窗口无效（目标值与初始值过近）")
@@ -812,8 +962,12 @@ class MainWindow(QtWidgets.QMainWindow):
             }
         self._set_metrics_rows(rows)
         self._status("实验指标已计算")
+        self._last_metrics = trial["metrics"]
         if self.workspace is not None:
             self.workspace.append_trial(trial)
+            self._refresh_trials_table()
+        if kind == "step" and self.tuner.active:
+            self.tuner.on_trial(m, self._gains_dict(), float(self._capture_sp))
 
     @staticmethod
     def _step_metric_rows(m: StepMetrics) -> list[tuple[str, str]]:
@@ -847,8 +1001,205 @@ class MainWindow(QtWidgets.QMainWindow):
             self.metrics_table.setItem(i, 0, QtWidgets.QTableWidgetItem(name))
             self.metrics_table.setItem(i, 1, QtWidgets.QTableWidgetItem(value))
 
+    def _load_llm_settings_into_ui(self) -> None:
+        llm = self.app_config.data.get("llm", {})
+        self.llm_base_edit.setText(str(llm.get("base_url", "https://api.deepseek.com")))
+        self.llm_model_edit.setText(str(llm.get("model", "deepseek-chat")))
+        self.llm_key_edit.setText(str(llm.get("api_key", "")))
+
+    def _save_llm_settings(self) -> None:
+        llm = self.app_config.data.setdefault("llm", {})
+        llm["base_url"] = self.llm_base_edit.text().strip() or "https://api.deepseek.com"
+        llm["model"] = self.llm_model_edit.text().strip() or "deepseek-chat"
+        llm["api_key"] = self.llm_key_edit.text().strip()
+        self.app_config.save()
+        self._status("LLM 设置已保存（全局配置，不写入固件目录）")
+
+    def _make_suggest(self):
+        llm = self.app_config.data.get("llm", {})
+        client = DeepSeekTuner(
+            api_key=str(llm.get("api_key", "")),
+            base_url=str(llm.get("base_url", "https://api.deepseek.com")),
+            model=str(llm.get("model", "deepseek-chat")),
+        )
+        return client.suggest
+
+    def _start_autotune(self) -> None:
+        if not self._ensure_link():
+            return
+        if self.tuner.active:
+            return
+        if self.runner.active:
+            self._status("实验运行中，无法启动自动调参")
+            return
+        if not str(self.app_config.data.get("llm", {}).get("api_key", "")).strip():
+            QtWidgets.QMessageBox.information(
+                self, "缺少 API Key", "请先在“AI 调参”页填写 DeepSeek API Key 并点击保存。"
+            )
+            return
+        try:
+            suggest = self._make_suggest()
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "AI 客户端初始化失败", str(exc))
+            return
+        self.ai_log.setRowCount(0)
+        self.sp_spin.setValue(self.ai_target_spin.value())
+        self._set_ai_ui(True)
+        try:
+            self.tuner.start(
+                self.kp_spin.value(),
+                self.ki_spin.value(),
+                self.kd_spin.value(),
+                max_iters=self.ai_iters_spin.value(),
+                suggest=suggest,
+                limits=copy.deepcopy(self.safety),
+                setpoint=self.ai_target_spin.value(),
+            )
+        except Exception as exc:
+            self._set_ai_ui(False)
+            QtWidgets.QMessageBox.critical(self, "启动失败", str(exc))
+
+    def _abort_autotune(self) -> None:
+        if self.tuner.active:
+            self.tuner.abort()
+        if self.runner.active:
+            self.runner.abort()
+
+    def _set_ai_ui(self, active: bool) -> None:
+        self.ai_start_btn.setEnabled(not active)
+        self.ai_abort_btn.setEnabled(active)
+        self._set_script_ui(self.runner.active)
+
+    def _on_tuner_event(self, kind: str, data: dict) -> None:
+        if kind == "status":
+            text = str(data.get("text", ""))
+            self.ai_status.setText(text)
+            self._status(text)
+        elif kind == "apply_gains":
+            self._set_gain_spins(
+                float(data.get("kp", 0.0)),
+                float(data.get("ki", 0.0)),
+                float(data.get("kd", 0.0)),
+            )
+            self._apply_gains(silent=True)
+        elif kind == "run_experiment":
+            script = autotune_step_script(
+                self.ai_target_spin.value(),
+                settle_s=self._ai_settle_s,
+                countdown_s=self._ai_countdown_s,
+                measure_s=self.ai_measure_spin.value(),
+            )
+            self._run_script(script)
+        elif kind == "iteration":
+            self._append_ai_log_row(data)
+        elif kind == "finished":
+            self._set_ai_ui(False)
+            best = data.get("best_gains")
+            score = data.get("best_score")
+            text = f"{data.get('reason', '完成')}；共 {data.get('iterations', 0)} 轮"
+            if best is not None and score is not None:
+                text += (
+                    f"，最优评分 {score:.2f} "
+                    f"(Kp={best['kp']:g} Ki={best['ki']:g} Kd={best['kd']:g})"
+                )
+            self.ai_status.setText(text)
+            self._status(text)
+            self._refresh_trials_table()
+
+    def _append_ai_log_row(self, entry: dict) -> None:
+        row = self.ai_log.rowCount()
+        self.ai_log.insertRow(row)
+        values = [
+            str(entry.get("iteration", "")),
+            _fmt_num(entry.get("kp"), ".4g"),
+            _fmt_num(entry.get("ki"), ".4g"),
+            _fmt_num(entry.get("kd"), ".4g"),
+            _fmt_num(entry.get("score"), ".2f"),
+            _fmt_num(entry.get("overshoot_pct"), ".2f"),
+            _fmt_num(entry.get("settling_time"), ".3f"),
+            "当前最优" if entry.get("best") else "",
+        ]
+        for col, text in enumerate(values):
+            self.ai_log.setItem(row, col, QtWidgets.QTableWidgetItem(text))
+
+    def _refresh_trials_table(self) -> None:
+        self.trials_table.setRowCount(0)
+        self._trial_records = []
+        if self.workspace is None:
+            return
+        records = list(reversed(self.workspace.read_trials()))
+        self._trial_records = records
+        for trial in records:
+            row = self.trials_table.rowCount()
+            self.trials_table.insertRow(row)
+            gains = trial.get("gains") or {}
+            metrics = trial.get("metrics") or {}
+            timestamp = trial.get("ts")
+            time_text = (
+                datetime.fromtimestamp(timestamp).strftime("%m-%d %H:%M:%S")
+                if isinstance(timestamp, (int, float))
+                else "—"
+            )
+            values = [
+                time_text,
+                str(trial.get("kind", "")),
+                _fmt_num(gains.get("kp"), ".4g"),
+                _fmt_num(gains.get("ki"), ".4g"),
+                _fmt_num(gains.get("kd"), ".4g"),
+                _fmt_num(metrics.get("overshoot_pct"), ".2f"),
+                _fmt_num(metrics.get("rise_time"), ".3f"),
+                _fmt_num(metrics.get("settling_time"), ".3f"),
+                _fmt_num(metrics.get("steady_error"), "+.5f"),
+                _fmt_num(metrics.get("recovery_time"), ".3f"),
+            ]
+            for col, text in enumerate(values):
+                self.trials_table.setItem(row, col, QtWidgets.QTableWidgetItem(text))
+        if records:
+            self.trials_table.selectRow(0)
+
+    def _export_selected_trial(self) -> None:
+        if self.workspace is None:
+            self._status("请先选择工作目录")
+            return
+        row = self.trials_table.currentRow()
+        if row < 0 or row >= len(self._trial_records):
+            self._status("请先在历史列表中选择一条记录")
+            return
+        trial = self._trial_records[row]
+        gains = trial.get("gains") or self._gains_dict()
+        try:
+            config_path, header_path = export_artifacts(
+                self.workspace,
+                gains,
+                metrics=trial.get("metrics"),
+                source=str(trial.get("kind", "trial")),
+                setpoint=trial.get("setpoint"),
+            )
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "导出失败", str(exc))
+            return
+        self._status(f"已导出 {config_path.name} 与 {header_path.name} 到 {config_path.parent}")
+
+    def _export_current(self) -> None:
+        if self.workspace is None:
+            self._status("请先选择工作目录")
+            return
+        try:
+            config_path, header_path = export_artifacts(
+                self.workspace,
+                self._gains_dict(),
+                metrics=self._last_metrics,
+                source="current",
+                setpoint=self.sp_spin.value(),
+            )
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "导出失败", str(exc))
+            return
+        self._status(f"已导出 {config_path.name} 与 {header_path.name} 到 {config_path.parent}")
+
     def _tick(self) -> None:
         self.runner.tick()
+        self.tuner.tick()
         link = self.link
         if link is None:
             return

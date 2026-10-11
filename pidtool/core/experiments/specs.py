@@ -48,6 +48,36 @@ def step_response_script(
     )
 
 
+def autotune_step_script(
+    target_sp: float,
+    baseline_sp: float = 0.0,
+    settle_s: float = 2.0,
+    countdown_s: float = 3.0,
+    measure_s: float = 4.0,
+) -> ExperimentScript:
+    return ExperimentScript(
+        "自动调参阶跃",
+        (
+            ExperimentStep("command", {"cmd": "mode", "mode": "run"}),
+            ExperimentStep("command", {"cmd": "setpoint", "value": baseline_sp}),
+            ExperimentStep("wait", {"seconds": settle_s}),
+            ExperimentStep("collect_start", {"lookback": 0.5}),
+            ExperimentStep(
+                "prompt",
+                {
+                    "text": f"{countdown_s:.0f} 秒后下发阶跃 {baseline_sp:g} → {target_sp:g}",
+                    "countdown_s": countdown_s,
+                    "manual": False,
+                },
+            ),
+            ExperimentStep("mark", {"label": MARK_STEP}),
+            ExperimentStep("command", {"cmd": "setpoint", "value": target_sp}),
+            ExperimentStep("wait", {"seconds": measure_s}),
+            ExperimentStep("collect_end", {"kind": "step"}),
+        ),
+    )
+
+
 def disturbance_script(
     disturb_s: float = 5.0,
     settle_s: float = 2.0,

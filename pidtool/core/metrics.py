@@ -35,7 +35,8 @@ def analyze_step(
     head = max(3, n // 20)
     y0 = float(np.mean(y[:head]))
     delta = float(setpoint) - y0
-    if abs(delta) < 1e-9:
+    head_std = float(np.std(y[:head]))
+    if abs(delta) < max(5.0 * head_std, 1e-9):
         return None
 
     z = (y - y0) / delta

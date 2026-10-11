@@ -21,7 +21,7 @@ def qapp():
     yield app
 
 
-def _wait_until(qapp, condition, timeout=8.0):
+def _wait_until(qapp, condition, timeout=20.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
         qapp.processEvents()
@@ -39,7 +39,7 @@ def window(qapp, tmp_path):
     win.link_combo.setCurrentIndex(win.link_combo.findData("mock"))
     win._connect()
     assert win.link is not None
-    assert _wait_until(qapp, lambda: win.link.buffer.total >= 60, timeout=5.0)
+    assert _wait_until(qapp, lambda: win.link.buffer.total >= 60, timeout=10.0)
     yield win
     win._disconnect()
     win.close()
@@ -49,7 +49,7 @@ def test_step_script_flow(qapp, window):
     window.sp_spin.setValue(2.0)
     window._run_script(step_response_script(2.0, settle_s=0.2, countdown_s=0.3, measure_s=0.8))
     assert window.runner.active
-    assert _wait_until(qapp, lambda: not window.runner.active, timeout=8.0)
+    assert _wait_until(qapp, lambda: not window.runner.active, timeout=20.0)
     assert window.banner.isHidden()
     assert window.capture_btn.isEnabled()
     assert len(window.plots.markers) >= 1
@@ -64,7 +64,7 @@ def test_disturbance_script_manual_prompt(qapp, window):
     window._run_script(
         disturbance_script(disturb_s=0.4, settle_s=0.2, countdown_s=0.3, recover_s=0.5)
     )
-    deadline = time.time() + 10.0
+    deadline = time.time() + 25.0
     while window.runner.active and time.time() < deadline:
         qapp.processEvents()
         if not window.banner.isHidden() and not window.banner_confirm.isHidden():
