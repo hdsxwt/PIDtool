@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pidtool"
+version = "0.1.0"
+description = "STM32 PID tuning workbench: serial link, live plots, metrics and AI-assisted auto-tuning"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.7",
+    "pyqtgraph>=0.13",
+    "pyserial>=3.5",
+    "numpy>=1.26",
+    "tomli-w>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+pidtool = "pidtool.ui.main_window:main"
+
+[tool.setuptools.packages.find]
+include = ["pidtool*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
