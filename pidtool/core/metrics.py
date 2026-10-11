@@ -92,6 +92,57 @@ def analyze_step(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class DisturbanceMetrics:
+    max_deviation: float
+    max_deviation_time: float
+    recovery_time: float
+    residual_error: float
+    samples: int
+
+
+def analyze_disturbance(
+    t: np.ndarray,
+    y: np.ndarray,
+    setpoint: float,
+    disturb_start: float,
+    disturb_end: float,
+    band: float,
+    tail_fraction: float = 0.1,
+) -> DisturbanceMetrics | None:
+    t = np.asarray(t, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    n = min(t.size, y.size)
+    if n < 10 or disturb_end <= disturb_start:
+        return None
+    t = t[:n]
+    y = y[:n]
+    error = y - setpoint
+
+    mask = (t >= disturb_start) & (t <= disturb_end)
+    if not mask.any():
+        return None
+    idxs = np.flatnonzero(mask)
+    deviations = np.abs(error[idxs])
+    peak = int(np.argmax(deviations))
+    max_deviation = float(deviations[peak])
+    max_deviation_time = float(t[idxs[peak]])
+
+    after = np.flatnonzero(t > disturb_end)
+    recovery = float("nan")
+    if after.size:
+        outside = np.flatnonzero(np.abs(error[after]) > band)
+        if outside.size == 0:
+            recovery = 0.0
+        elif int(outside[-1]) < after.size - 1:
+            pos = after[int(outside[-1]) + 1]
+            recovery = float(t[pos] - disturb_end)
+
+    tail_start = max(0, n - max(3, int(round(n * tail_fraction))))
+    residual = float(setpoint - np.mean(y[tail_start:]))
+    return DisturbanceMetrics(max_deviation, max_deviation_time, recovery, residual, n)
+
+
 def rmse(y: np.ndarray, reference: float | np.ndarray) -> float:
     y = np.asarray(y, dtype=np.float64)
     ref = np.asarray(reference, dtype=np.float64)

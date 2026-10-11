@@ -68,11 +68,39 @@ class PlotPanel(QtWidgets.QWidget):
         layout.addLayout(bar)
 
         self._frozen_t: float | None = None
+        self.markers: list[tuple[float, list[tuple[pg.PlotItem, pg.InfiniteLine]]]] = []
 
     def clear(self) -> None:
         for curve in self.curves.values():
             curve.setData([], [])
+        self.clear_markers()
         self._frozen_t = None
+
+    def add_marker(self, t: float, label: str) -> None:
+        pen = pg.mkPen("#ffd166", width=1.2, style=QtCore.Qt.PenStyle.DashDotLine)
+        items: list[tuple[pg.PlotItem, pg.InfiniteLine]] = []
+        for plot in (self.plot_track, self.plot_error, self.plot_terms):
+            line = pg.InfiniteLine(
+                angle=90,
+                movable=False,
+                pen=pen,
+                label=label if plot is self.plot_track else None,
+                labelOpts={
+                    "position": 0.08,
+                    "color": "#ffd166",
+                    "fill": "#3b4a6b",
+                    "movable": False,
+                },
+            )
+            plot.addItem(line, ignoreBounds=True)
+            items.append((plot, line))
+        self.markers.append((float(t), items))
+
+    def clear_markers(self) -> None:
+        for _, items in self.markers:
+            for plot, line in items:
+                plot.removeItem(line)
+        self.markers.clear()
 
     def update_data(self, data: dict[str, np.ndarray], t_now: float) -> None:
         t = data["t"]
@@ -85,6 +113,9 @@ class PlotPanel(QtWidgets.QWidget):
         else:
             self._frozen_t = None
             t_ref = float(t_now)
+        for mark_t, items in self.markers:
+            for _, line in items:
+                line.setValue(mark_t - t_ref)
         window = float(self.window_spin.value())
         idx = int(np.searchsorted(t, t_ref - window, side="left"))
         t = t[idx:]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from pidtool.core.metrics import analyze_step, rmse
+from pidtool.core.metrics import analyze_disturbance, analyze_step, rmse
 
 
 def _first_crossing(t: np.ndarray, y: np.ndarray, level: float) -> float | None:
@@ -95,3 +95,35 @@ def test_no_step_returns_none():
 def test_rmse():
     y = np.array([1.0, 2.0, 3.0])
     assert abs(rmse(y, 1.0) - np.sqrt((0.0 + 1.0 + 4.0) / 3.0)) < 1e-12
+
+
+def test_disturbance_recovery():
+    t = np.arange(0.0, 8.0, 0.001)
+    y = np.ones_like(t)
+    during = (t >= 2.0) & (t < 3.0)
+    y[during] = 1.0 - 0.3 * (t[during] - 2.0)
+    after = t >= 3.0
+    y[after] = 1.0 - 0.3 * np.exp(-(t[after] - 3.0) / 0.5)
+    m = analyze_disturbance(t, y, 1.0, 2.0, 3.0, band=0.02)
+    assert m is not None
+    assert abs(m.max_deviation - 0.3) < 1e-3
+    assert abs(m.max_deviation_time - 3.0) < 0.01
+    assert abs(m.recovery_time - 0.5 * np.log(15.0)) < 0.02
+    assert abs(m.residual_error) < 1e-3
+
+
+def test_disturbance_no_recovery():
+    t = np.arange(0.0, 6.0, 0.001)
+    y = np.ones_like(t)
+    y[t >= 2.0] = 0.7
+    m = analyze_disturbance(t, y, 1.0, 2.0, 3.0, band=0.02)
+    assert m is not None
+    assert abs(m.max_deviation - 0.3) < 1e-6
+    assert m.recovery_time != m.recovery_time
+    assert abs(m.residual_error - 0.3) < 1e-3
+
+
+def test_disturbance_invalid_window():
+    t = np.arange(0.0, 4.0, 0.001)
+    y = np.ones_like(t)
+    assert analyze_disturbance(t, y, 1.0, 3.0, 2.0, band=0.02) is None
