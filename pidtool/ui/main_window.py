@@ -12,6 +12,7 @@ from serial.tools import list_ports
 from pidtool.ai.llm import DeepSeekTuner
 from pidtool.ai.tuner import AutoTuner
 from pidtool.app_config import AppConfig
+from pidtool.codeagent import CodeEditSession, OpencodeAgent, build_code_prompt
 from pidtool.core.experiments import (
     ExperimentRunner,
     ExperimentScript,
@@ -80,6 +81,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._capturing = False
         self.runner = ExperimentRunner(self._on_experiment_event)
         self.tuner = AutoTuner(self._on_tuner_event)
+        self.code_session = CodeEditSession()
+        self._code_prompt = ""
+        self._code_decided = False
+        self._code_review_shown = False
         self._script_marks: list[tuple[float, str]] = []
         self._script_kind = ""
         self._prompt_text = ""
@@ -185,6 +190,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.bottom_tabs = QtWidgets.QTabWidget()
         self.bottom_tabs.addTab(controls, "实验")
         self.bottom_tabs.addTab(self._build_ai_tab(), "AI 调参")
+        self.bottom_tabs.addTab(self._build_code_tab(), "代码修改")
         self.bottom_tabs.addTab(self._build_history_tab(), "历史")
         splitter.addWidget(self.bottom_tabs)
         splitter.setStretchFactor(0, 3)
@@ -408,6 +414,94 @@ class MainWindow(QtWidgets.QMainWindow):
         button_row.addWidget(export_cur_btn)
         button_row.addStretch(1)
         layout.addLayout(button_row)
+        return tab
+
+    def _build_code_tab(self) -> QtWidgets.QWidget:
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(tab)
+
+        left = QtWidgets.QVBoxLayout()
+        request_group = QtWidgets.QGroupBox("修改需求（仅限 PID 算法相关文件）")
+        request_layout = QtWidgets.QVBoxLayout(request_group)
+        self.code_request_edit = QtWidgets.QPlainTextEdit()
+        self.code_request_edit.setPlaceholderText(
+            "例如：给 PID 增加积分抗饱和（clamping），防止输出饱和时积分继续累积"
+        )
+        self.code_request_edit.setMaximumHeight(90)
+        self.code_context_check = QtWidgets.QCheckBox("附带当前 PID 参数与最近一次实验指标")
+        self.code_context_check.setChecked(True)
+        request_layout.addWidget(self.code_request_edit)
+        request_layout.addWidget(self.code_context_check)
+        left.addWidget(request_group)
+
+        settings_group = QtWidgets.QGroupBox("opencode 设置（全局配置）")
+        settings_form = QtWidgets.QFormLayout(settings_group)
+        self.code_exe_edit = QtWidgets.QLineEdit()
+        self.code_agent_edit = QtWidgets.QLineEdit()
+        self.code_agent_edit.setPlaceholderText("可选：受限 agent 名称")
+        self.code_timeout_spin = QtWidgets.QSpinBox()
+        self.code_timeout_spin.setRange(60, 3600)
+        self.code_timeout_spin.setSuffix(" s")
+        settings_form.addRow("可执行文件", self.code_exe_edit)
+        settings_form.addRow("Agent", self.code_agent_edit)
+        settings_form.addRow("超时", self.code_timeout_spin)
+        code_save_btn = QtWidgets.QPushButton("保存设置")
+        code_save_btn.clicked.connect(self._save_codeagent_settings)
+        settings_form.addRow(code_save_btn)
+        left.addWidget(settings_group)
+
+        button_row = QtWidgets.QHBoxLayout()
+        self.code_preview_btn = QtWidgets.QPushButton("生成预览")
+        self.code_preview_btn.clicked.connect(self._code_preview_clicked)
+        self.code_run_btn = QtWidgets.QPushButton("授权执行")
+        self.code_run_btn.setEnabled(False)
+        self.code_run_btn.clicked.connect(self._code_run_clicked)
+        self.code_cancel_btn = QtWidgets.QPushButton("中止")
+        self.code_cancel_btn.setEnabled(False)
+        self.code_cancel_btn.clicked.connect(self._code_cancel_clicked)
+        button_row.addWidget(self.code_preview_btn)
+        button_row.addWidget(self.code_run_btn)
+        button_row.addWidget(self.code_cancel_btn)
+        left.addLayout(button_row)
+
+        self.code_status = QtWidgets.QLabel(
+            "流程：填写需求 → 生成预览 → 授权执行 → 审查 git diff → 保留或回滚"
+        )
+        self.code_status.setWordWrap(True)
+        left.addWidget(self.code_status)
+        left.addStretch(1)
+        layout.addLayout(left)
+
+        mono = QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.SystemFont.FixedFont)
+        self.code_console = QtWidgets.QPlainTextEdit()
+        self.code_console.setReadOnly(True)
+        self.code_console.setFont(mono)
+        self.code_console.setMaximumBlockCount(4000)
+        self.code_diff = QtWidgets.QPlainTextEdit()
+        self.code_diff.setReadOnly(True)
+        self.code_diff.setFont(mono)
+        self.code_diff.setMaximumBlockCount(6000)
+
+        review_row = QtWidgets.QHBoxLayout()
+        self.code_keep_btn = QtWidgets.QPushButton("保留修改")
+        self.code_keep_btn.setEnabled(False)
+        self.code_keep_btn.clicked.connect(self._code_keep_clicked)
+        self.code_rollback_btn = QtWidgets.QPushButton("回滚修改")
+        self.code_rollback_btn.setEnabled(False)
+        self.code_rollback_btn.clicked.connect(self._code_rollback_clicked)
+        review_row.addWidget(self.code_keep_btn)
+        review_row.addWidget(self.code_rollback_btn)
+        review_row.addStretch(1)
+
+        right = QtWidgets.QVBoxLayout()
+        right.addWidget(QtWidgets.QLabel("预览 / 执行输出"))
+        right.addWidget(self.code_console, 2)
+        right.addWidget(QtWidgets.QLabel("变更审查（git diff）"))
+        right.addWidget(self.code_diff, 3)
+        right.addLayout(review_row)
+        layout.addLayout(right, 1)
+
+        self._load_codeagent_settings_into_ui()
         return tab
 
     def _build_statusbar(self) -> None:
@@ -1197,9 +1291,197 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._status(f"已导出 {config_path.name} 与 {header_path.name} 到 {config_path.parent}")
 
+    def _load_codeagent_settings_into_ui(self) -> None:
+        cfg = self.app_config.data.get("codeagent", {})
+        self.code_exe_edit.setText(str(cfg.get("executable", "opencode")))
+        self.code_agent_edit.setText(str(cfg.get("agent_name", "")))
+        self.code_timeout_spin.setValue(int(cfg.get("timeout_s", 900)))
+
+    def _save_codeagent_settings(self) -> None:
+        cfg = self.app_config.data.setdefault("codeagent", {})
+        cfg["executable"] = self.code_exe_edit.text().strip() or "opencode"
+        cfg["agent_name"] = self.code_agent_edit.text().strip()
+        cfg["timeout_s"] = int(self.code_timeout_spin.value())
+        self.app_config.save()
+        self._status("opencode 设置已保存（全局配置）")
+
+    def _make_code_agent(self) -> OpencodeAgent:
+        cfg = self.app_config.data.get("codeagent", {})
+        return OpencodeAgent(
+            executable=self.code_exe_edit.text().strip() or "opencode",
+            agent_name=self.code_agent_edit.text().strip(),
+            auto_approve=bool(cfg.get("auto_approve", True)),
+            timeout=float(self.code_timeout_spin.value()),
+        )
+
+    def _code_preview_clicked(self) -> None:
+        if self.workspace is None:
+            self._status("请先选择工作目录")
+            return
+        request = self.code_request_edit.toPlainText().strip()
+        if not request:
+            self._status("请先填写修改需求")
+            return
+        gains = self._gains_dict() if self.code_context_check.isChecked() else None
+        metrics = self._last_metrics if self.code_context_check.isChecked() else None
+        self._code_prompt = build_code_prompt(request, self.workspace.root, gains, metrics)
+        exe = self.code_exe_edit.text().strip() or "opencode"
+        agent_part = f" --agent {self.code_agent_edit.text().strip()}" if self.code_agent_edit.text().strip() else ""
+        command_line = f'{exe} run --dir "{self.workspace.root}" --auto{agent_part} "<提示词>"'
+        problems = CodeEditSession.precheck(self.workspace.root)
+        problem_text = "\n".join(f"- {p}" for p in problems)
+        preview = [
+            "=== 将执行的命令 ===",
+            command_line,
+            "",
+            "=== 预检查 ===",
+            problem_text if problems else "通过：git 仓库、已跟踪文件无未提交改动",
+            "",
+            "=== 提示词 ===",
+            self._code_prompt,
+        ]
+        self.code_console.setPlainText("\n".join(preview))
+        self.code_diff.clear()
+        self._code_decided = False
+        self.code_run_btn.setEnabled(not problems)
+        if problems:
+            self.code_status.setText("预检查未通过，请先处理上述问题再授权执行")
+        else:
+            self.code_status.setText("预览已生成；确认无误后点击“授权执行”")
+
+    def _code_run_clicked(self) -> None:
+        if self.workspace is None or not self._code_prompt:
+            self._status("请先生成预览")
+            return
+        if self.code_session.active:
+            return
+        problems = CodeEditSession.precheck(self.workspace.root)
+        if problems:
+            QtWidgets.QMessageBox.warning(
+                self, "预检查未通过", "\n".join(f"- {p}" for p in problems)
+            )
+            return
+        try:
+            agent = self._make_code_agent()
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "opencode 初始化失败", str(exc))
+            return
+        try:
+            self.code_session.start(agent, self.workspace.root, self._code_prompt)
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "启动失败", str(exc))
+            return
+        self.code_console.appendPlainText("\n=== 开始执行 ===")
+        self.code_diff.clear()
+        self._code_decided = False
+        self._code_review_shown = False
+        self._set_code_running_ui(True)
+        self.code_status.setText("opencode 执行中…（可点中止）")
+
+    def _code_cancel_clicked(self) -> None:
+        if self.code_session.active:
+            self.code_session.cancel()
+            self.code_status.setText("正在中止…")
+
+    def _set_code_running_ui(self, running: bool) -> None:
+        self.code_preview_btn.setEnabled(not running)
+        self.code_run_btn.setEnabled(not running and bool(self._code_prompt))
+        self.code_cancel_btn.setEnabled(running)
+        if running:
+            self.code_keep_btn.setEnabled(False)
+            self.code_rollback_btn.setEnabled(False)
+
+    def _on_code_done(self, outcome) -> None:
+        self._set_code_running_ui(False)
+        lines = []
+        status_bits = [f"退出码 {outcome.exit_code}", f"耗时 {outcome.duration_s:.1f}s"]
+        if outcome.timed_out:
+            status_bits.append("超时中止")
+        if outcome.cancelled:
+            status_bits.append("已取消")
+        if outcome.error:
+            status_bits.append(f"错误: {outcome.error}")
+            lines.append(f"[错误] {outcome.error}")
+        if outcome.diff_text.strip():
+            lines.append(outcome.diff_text)
+        if outcome.new_files:
+            lines.append("新增文件:")
+            lines += [f"  + {name}" for name in outcome.new_files]
+        if not outcome.diff_text.strip() and not outcome.new_files:
+            lines.append("(没有检测到任何文件改动)")
+        self.code_diff.setPlainText("\n".join(lines))
+        has_changes = bool(outcome.diff_text.strip() or outcome.new_files)
+        self.code_keep_btn.setEnabled(has_changes)
+        self.code_rollback_btn.setEnabled(True)
+        self.code_status.setText("执行结束（{}）；请审查 diff 后选择保留或回滚".format("，".join(status_bits)))
+
+    def _code_keep_clicked(self) -> None:
+        outcome = self.code_session.outcome
+        if outcome is None or self._code_decided:
+            return
+        self._code_decided = True
+        if self.workspace is not None:
+            self.workspace.append_trial(
+                {
+                    "kind": "code_edit",
+                    "request": self.code_request_edit.toPlainText().strip(),
+                    "outcome": "kept",
+                    "exit_code": outcome.exit_code,
+                    "timed_out": outcome.timed_out,
+                    "cancelled": outcome.cancelled,
+                    "duration_s": outcome.duration_s,
+                    "changed_files": outcome.changed_files,
+                    "new_files": outcome.new_files,
+                    "diff_stat": outcome.diff_stat,
+                    "output_tail": outcome.output_tail[-40:],
+                }
+            )
+            self._refresh_trials_table()
+        self.code_keep_btn.setEnabled(False)
+        self.code_rollback_btn.setEnabled(False)
+        self.code_status.setText("已保留修改（已记入历史）。请自行编译/烧录并验证")
+        self.code_session.clear()
+
+    def _code_rollback_clicked(self) -> None:
+        outcome = self.code_session.outcome
+        if outcome is None or self._code_decided:
+            return
+        removed = self.code_session.rollback()
+        self._code_decided = True
+        if self.workspace is not None:
+            self.workspace.append_trial(
+                {
+                    "kind": "code_edit",
+                    "request": self.code_request_edit.toPlainText().strip(),
+                    "outcome": "rolled_back",
+                    "exit_code": outcome.exit_code,
+                    "timed_out": outcome.timed_out,
+                    "cancelled": outcome.cancelled,
+                    "duration_s": outcome.duration_s,
+                    "changed_files": outcome.changed_files,
+                    "new_files": outcome.new_files,
+                    "removed_files": removed,
+                    "output_tail": outcome.output_tail[-40:],
+                }
+            )
+            self._refresh_trials_table()
+        self.code_keep_btn.setEnabled(False)
+        self.code_rollback_btn.setEnabled(False)
+        removed_text = f"，并删除新增文件 {len(removed)} 个" if removed else ""
+        self.code_status.setText(f"已回滚全部改动{removed_text}（已记入历史）")
+        self.code_diff.appendPlainText("\n=== 已回滚，工作区恢复到执行前状态 ===")
+        self.code_session.clear()
+
     def _tick(self) -> None:
         self.runner.tick()
         self.tuner.tick()
+        for event_kind, payload in self.code_session.poll():
+            if event_kind == "output":
+                self.code_console.appendPlainText(str(payload))
+        outcome = self.code_session.outcome
+        if outcome is not None and not self._code_review_shown:
+            self._code_review_shown = True
+            self._on_code_done(outcome)
         link = self.link
         if link is None:
             return
@@ -1231,6 +1513,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event) -> None:
         self._save_settings_from_ui()
+        if self.code_session.active:
+            self.code_session.cancel()
         self._disconnect()
         self.app_config.save()
         super().closeEvent(event)

@@ -20,6 +20,12 @@ DEFAULT_APP_CONFIG: dict[str, Any] = {
         "model": "deepseek-chat",
         "api_key": "",
     },
+    "codeagent": {
+        "executable": "opencode",
+        "agent_name": "",
+        "timeout_s": 900,
+        "auto_approve": True,
+    },
     "ui": {"window_s": 10.0},
 }
 
