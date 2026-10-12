@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import struct
 
 from pidtool.link.protocol import (
@@ -25,6 +26,26 @@ from pidtool.link.protocol import (
 
 def test_crc_known_vector():
     assert crc16_ccitt(b"123456789") == 0x29B1
+
+
+def _reference_crc16(data: bytes) -> int:
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            if crc & 0x8000:
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF
+            else:
+                crc = (crc << 1) & 0xFFFF
+    return crc
+
+
+def test_crc_matches_bitwise_reference():
+    rng = random.Random(42)
+    for length in (0, 1, 2, 5, 29, 64, 200, 251):
+        payload = bytes(rng.randrange(256) for _ in range(length))
+        assert crc16_ccitt(payload) == _reference_crc16(payload)
+    assert crc16_ccitt(b"") == 0xFFFF
 
 
 def test_telemetry_roundtrip():

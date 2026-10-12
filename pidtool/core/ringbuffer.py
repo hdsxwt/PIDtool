@@ -61,4 +61,26 @@ class SampleBuffer:
                 return {name: arr[:0].copy() for name, arr in self._arrays.items()}
             start = (self._count - n) % self._capacity
             idx = (np.arange(n, dtype=np.int64) + start) % self._capacity
-            return {name: arr[idx].copy() for name, arr in self._arrays.items()}
+            return {name: arr[idx] for name, arr in self._arrays.items()}
+
+    def tail_span(self, span: float) -> dict[str, np.ndarray]:
+        with self._lock:
+            size = min(self._count, self._capacity)
+            if size == 0:
+                return {name: arr[:0].copy() for name, arr in self._arrays.items()}
+            cap = self._capacity
+            t_arr = self._arrays["t"]
+            oldest = (self._count - size) % cap
+            newest = (self._count - 1) % cap
+            cutoff = float(t_arr[newest]) - max(0.0, float(span))
+            if newest >= oldest:
+                pos = int(np.searchsorted(t_arr[oldest : newest + 1], cutoff, side="left"))
+                idx0 = oldest + pos
+            else:
+                pos = int(np.searchsorted(t_arr[oldest:], cutoff, side="left"))
+                idx0 = oldest + pos
+                if idx0 >= cap:
+                    idx0 = int(np.searchsorted(t_arr[: newest + 1], cutoff, side="left"))
+            n = (newest - idx0) % cap + 1
+            idx = (np.arange(n, dtype=np.int64) + idx0) % cap
+            return {name: arr[idx] for name, arr in self._arrays.items()}

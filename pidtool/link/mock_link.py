@@ -114,9 +114,9 @@ class MockLink(LinkBase):
     def _run(self) -> None:
         next_t = time.perf_counter()
         while self._open:
-            now = time.perf_counter()
-            if next_t - now > 0.004:
-                time.sleep(0.002)
+            delay = next_t - time.perf_counter()
+            if delay > 0.0:
+                time.sleep(delay)
                 continue
             while self._open and next_t <= time.perf_counter():
                 self._step()

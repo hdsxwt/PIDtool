@@ -98,7 +98,7 @@ class SerialLink(LinkBase):
         while self._open:
             try:
                 waiting = ser.in_waiting
-                data = ser.read(waiting if waiting else 1)
+                data = ser.read(min(waiting, 16384) if waiting else 1)
             except Exception as exc:
                 self.stats.errors += 1
                 self.stats.last_error = str(exc)

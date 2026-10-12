@@ -80,6 +80,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._capture_t0: float | None = None
         self._capture_sp = 1.0
         self._capturing = False
+        self._last_plot_t: float | None = None
         self.runner = ExperimentRunner(self._on_experiment_event)
         self.tuner = AutoTuner(self._on_tuner_event)
         self.code_session = CodeEditSession()
@@ -178,7 +179,7 @@ class MainWindow(QtWidgets.QMainWindow):
         root.addWidget(splitter, 1)
 
         self.plots = PlotPanel()
-        self.plots.clear_btn.clicked.connect(self.plots.clear)
+        self.plots.clear_btn.clicked.connect(self._clear_plots)
         splitter.addWidget(self.plots)
 
         controls = QtWidgets.QWidget()
@@ -523,6 +524,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def _status(self, message: str, timeout: int = 5000) -> None:
         self.statusBar().showMessage(message, timeout)
 
+    def _clear_plots(self) -> None:
+        self.plots.clear()
+        self._last_plot_t = None
+
+    def _plot_span(self) -> float:
+        window_s = float(self.plots.window_spin.value())
+        return max(5.0, window_s * 2.0)
+
     def _refresh_ports(self) -> None:
         current = self.port_combo.currentData()
         self.port_combo.blockSignals(True)
@@ -721,6 +730,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_rate.setText("采样率: -")
         self._capture_t0 = None
         self._capturing = False
+        self._last_plot_t = None
         self.capture_btn.setText("开始采集")
 
     def _set_connected_ui(self, connected: bool) -> None:
@@ -847,11 +857,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.capture_btn.setText("结束采集")
         self._status(f"开始采集（目标 {self._capture_sp:g}，含 {lookback:g}s 基准段）")
 
+    def _capture_snapshot(self) -> dict:
+        if self.link is None or self._capture_t0 is None:
+            return {}
+        _, t_latest = self.link.buffer.span()
+        span = max(1.0, t_latest - self._capture_t0 + 1.0)
+        return self.link.buffer.tail_span(span)
+
     def _compute_metrics(self) -> None:
         if self.link is None or self._capture_t0 is None:
             QtWidgets.QMessageBox.information(self, "无法计算", "请先连接链路并开始采集。")
             return
-        data = self.link.buffer.tail(400000)
+        data = self._capture_snapshot()
         t = data["t"]
         if t.size < 50:
             self._status("数据不足，无法计算指标")
@@ -995,7 +1012,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.link is None or self._capture_t0 is None:
             self._status("采集数据缺失，无法计算实验指标")
             return
-        data = self.link.buffer.tail(400000)
+        data = self._capture_snapshot()
         t = data["t"]
         if t.size < 50:
             self._status("数据不足，无法计算实验指标")
@@ -1534,10 +1551,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self._disconnect()
             self._status(f"链路已断开: {error}")
             return
-        data = link.buffer.tail(250000)
+        data = link.buffer.tail_span(self._plot_span())
         t = data["t"]
         if t.size:
-            self.plots.update_data(data, float(t[-1]))
+            t_last = float(t[-1])
+            if t_last != self._last_plot_t:
+                self._last_plot_t = t_last
+                self.plots.update_data(data, t_last)
         for event in link.drain_events():
             if event.kind == "gains":
                 self._set_gain_spins(event.data["kp"], event.data["ki"], event.data["kd"])
@@ -1547,7 +1567,11 @@ class MainWindow(QtWidgets.QMainWindow):
                     self._status(f"设备返回错误 ACK: 0x{event.data.get('acked', 0):02X}")
             elif event.kind == "text":
                 self._status(str(event.data.get("text", "")))
-        rate = link.estimate_rate(2.0)
+        ts = data["t"]
+        if ts.size >= 2 and float(ts[-1]) > float(ts[0]):
+            rate = (ts.size - 1) / (float(ts[-1]) - float(ts[0]))
+        else:
+            rate = 0.0
         self.lbl_rate.setText(f"采样率: {rate:.0f} Hz")
         stats = link.stats
         self.lbl_rx.setText(
