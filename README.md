@@ -100,6 +100,20 @@ python -m venv .venv
 
 数据格式详见 [docs/DATA_FORMATS.md](docs/DATA_FORMATS.md)。
 
+## 打包为 Windows 可执行程序
+
+```powershell
+.\build_win.ps1
+```
+
+产物在 `dist\PIDtool\`（约 170 MB，免安装）：
+
+- 把整个 `dist\PIDtool\` 目录复制到程序目录，例如
+  `C:\Program Files\PIDtool`（需管理员）或 `%LOCALAPPDATA%\Programs\PIDtool`（无需管理员）
+- 右键 `PIDtool.exe` → 发送到 → 桌面快捷方式
+- 运行时配置仍写在 `%APPDATA%\PIDtool\app.toml`，工作区数据跟随固件目录，
+  与安装位置无关；需要版本升级时替换该目录即可
+
 ## 项目结构
 
 ```

@@ -116,6 +116,22 @@ When satisfied, select a trial on the History tab and click
 
 See [DATA_FORMATS.md](docs/en/DATA_FORMATS.md) for all file formats.
 
+## Packaging as a Windows Executable
+
+```powershell
+.\build_win.ps1
+```
+
+The result lands in `dist\PIDtool\` (~170 MB, portable):
+
+- Copy the whole `dist\PIDtool\` folder into a program directory, e.g.
+  `C:\Program Files\PIDtool` (admin required) or `%LOCALAPPDATA%\Programs\PIDtool`
+  (no admin)
+- Right-click `PIDtool.exe` -> Send to -> Desktop shortcut
+- Runtime config still lives in `%APPDATA%\PIDtool\app.toml`, and workspace data
+  follows the firmware directory, independent of the install location; replace
+  the folder to upgrade
+
 ## Project Layout
 
 ```

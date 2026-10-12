@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -1526,6 +1527,9 @@ def main() -> None:
     app.setStyle("Fusion")
     window = MainWindow()
     window.show()
+    smoke = os.environ.get("PIDTOOL_SMOKE_EXIT")
+    if smoke:
+        QtCore.QTimer.singleShot(int(float(smoke) * 1000), app.quit)
     exit_code = app.exec()
     window.close()
     del window
