@@ -12,7 +12,7 @@ from serial.tools import list_ports
 
 from pidtool.ai.llm import DeepSeekTuner
 from pidtool.ai.tuner import AutoTuner
-from pidtool.app_config import AppConfig
+from pidtool.app_config import DEFAULT_LLM_MODEL, AppConfig
 from pidtool.codeagent import CodeEditSession, OpencodeAgent, build_code_prompt
 from pidtool.core.experiments import (
     ExperimentRunner,
@@ -334,9 +334,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ai_measure_spin.setValue(4.0)
         self.ai_measure_spin.setDecimals(1)
         self.ai_measure_spin.setSuffix(" s")
+        self.ai_wave_check = QtWidgets.QCheckBox("发送降采样原始波形给 AI")
+        self.ai_wave_check.setToolTip(
+            "勾选后，每轮实验会附带约 80 点的降采样波形（t,sp,fb,u,up,ui,ud），"
+            "供 AI 分析响应形状与输出饱和；会增大 token 消耗"
+        )
         exp_form.addRow("目标设定值", self.ai_target_spin)
         exp_form.addRow("最大轮数", self.ai_iters_spin)
         exp_form.addRow("单轮观测时长", self.ai_measure_spin)
+        exp_form.addRow(self.ai_wave_check)
         button_row = QtWidgets.QHBoxLayout()
         self.ai_start_btn = QtWidgets.QPushButton("开始自动调参")
         self.ai_start_btn.clicked.connect(self._start_autotune)
@@ -1037,6 +1043,7 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             marks = {label: mt for mt, label in self._script_marks}
             step_t = marks.get(MARK_STEP)
+            keep = None
             if step_t is not None:
                 start = max(float(tt[0]), float(step_t) - 0.3)
                 keep = tt >= start
@@ -1055,6 +1062,18 @@ class MainWindow(QtWidgets.QMainWindow):
                 "metrics": self._step_metrics_dict(m),
                 "marks": [{"t": mt, "label": label} for mt, label in self._script_marks],
             }
+            waveform = None
+            if self.tuner.active and self.ai_wave_check.isChecked():
+                selection = slice(None) if keep is None else keep
+                waveform = self._downsample_waveform(
+                    tt,
+                    data["setpoint"][mask][selection],
+                    yy,
+                    data["u"][mask][selection],
+                    data["up"][mask][selection],
+                    data["ui"][mask][selection],
+                    data["ud"][mask][selection],
+                )
         self._set_metrics_rows(rows)
         self._status("实验指标已计算")
         self._last_metrics = trial["metrics"]
@@ -1062,7 +1081,31 @@ class MainWindow(QtWidgets.QMainWindow):
             self.workspace.append_trial(trial)
             self._refresh_trials_table()
         if kind == "step" and self.tuner.active:
-            self.tuner.on_trial(m, self._gains_dict(), float(self._capture_sp))
+            self.tuner.on_trial(
+                m, self._gains_dict(), float(self._capture_sp), waveform=waveform
+            )
+
+    @staticmethod
+    def _downsample_waveform(t, setpoint, feedback, u, up, ui, ud, max_points: int = 80) -> dict:
+        n = int(t.size)
+        if n == 0:
+            return {}
+        step = max(1, (n + max_points - 1) // max_points)
+        idx = slice(None, None, step)
+        t0 = float(t[0])
+
+        def series(values):
+            return [round(float(value), 4) for value in values[idx]]
+
+        return {
+            "t": [round(float(value) - t0, 4) for value in t[idx]],
+            "setpoint": series(setpoint),
+            "feedback": series(feedback),
+            "u": series(u),
+            "up": series(up),
+            "ui": series(ui),
+            "ud": series(ud),
+        }
 
     @staticmethod
     def _step_metric_rows(m: StepMetrics) -> list[tuple[str, str]]:
@@ -1099,13 +1142,13 @@ class MainWindow(QtWidgets.QMainWindow):
     def _load_llm_settings_into_ui(self) -> None:
         llm = self.app_config.data.get("llm", {})
         self.llm_base_edit.setText(str(llm.get("base_url", "https://api.deepseek.com")))
-        self.llm_model_edit.setText(str(llm.get("model", "deepseek-chat")))
+        self.llm_model_edit.setText(str(llm.get("model", DEFAULT_LLM_MODEL)))
         self.llm_key_edit.setText(str(llm.get("api_key", "")))
 
     def _save_llm_settings(self) -> None:
         llm = self.app_config.data.setdefault("llm", {})
         llm["base_url"] = self.llm_base_edit.text().strip() or "https://api.deepseek.com"
-        llm["model"] = self.llm_model_edit.text().strip() or "deepseek-chat"
+        llm["model"] = self.llm_model_edit.text().strip() or DEFAULT_LLM_MODEL
         llm["api_key"] = self.llm_key_edit.text().strip()
         self.app_config.save()
         self._status("LLM 设置已保存（全局配置，不写入固件目录）")
@@ -1115,7 +1158,7 @@ class MainWindow(QtWidgets.QMainWindow):
         client = DeepSeekTuner(
             api_key=str(llm.get("api_key", "")),
             base_url=str(llm.get("base_url", "https://api.deepseek.com")),
-            model=str(llm.get("model", "deepseek-chat")),
+            model=str(llm.get("model", DEFAULT_LLM_MODEL)),
         )
         return client.suggest
 

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 SYSTEM_PROMPT = (
     "你是电机速度环 PID 调参专家。用户会给出若干轮阶跃响应实验结果，"
-    "每轮包含 Kp/Ki/Kd 参数与响应指标（评分越低越好）。"
+    "每轮包含 Kp/Ki/Kd 参数与响应指标（评分越低越好），部分轮次会附带"
+    "降采样波形采样（t,sp,fb,u,up,ui,ud 逐行 CSV），可用于分析响应形状、"
+    "超调形态与输出饱和。"
     "你的任务是根据历史表现提出下一组参数：在保证稳定（无持续振荡）的前提下，"
     "减小超调、缩短上升与调节时间、消除稳态误差。"
     "若某轮之后指标变差，应避免沿该方向继续变化。"
@@ -10,6 +12,8 @@ SYSTEM_PROMPT = (
     '{"kp": 数字, "ki": 数字, "kd": 数字, "reasoning": "一句话理由"}，'
     "不要输出其他内容。"
 )
+
+WAVEFORM_COLUMNS = ("t", "setpoint", "feedback", "u", "up", "ui", "ud")
 
 
 def _fmt(value, spec: str) -> str:
@@ -46,6 +50,12 @@ def build_user_prompt(history: list[dict], limits: dict, setpoint: float) -> str
             f"振荡={'是' if entry.get('oscillating') else '否'} "
             f"评分={_fmt(entry.get('score'), '.2f')}{marker}"
         )
+        waveform = entry.get("waveform")
+        if waveform:
+            lines.append("  降采样波形 (每行: t,sp,fb,u,up,ui,ud):")
+            rows = zip(*(waveform.get(column, []) for column in WAVEFORM_COLUMNS))
+            for row in rows:
+                lines.append("  " + ",".join(_fmt(value, ".4g") for value in row))
     lines.append("")
     lines.append("请给出下一组 Kp/Ki/Kd，只输出 JSON。")
     return "\n".join(lines)

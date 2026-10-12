@@ -28,7 +28,7 @@ the firmware repository.
 | `recent_workspaces` | string[] | Recently opened workspaces (max 10) |
 | `last_workspace` | string | Last used workspace |
 | `llm.base_url` | string | OpenAI-compatible endpoint (default `https://api.deepseek.com`) |
-| `llm.model` | string | Model name (default `deepseek-chat`) |
+| `llm.model` | string | Model name (default `deepseek-flash`, i.e. DeepSeek-V4.1-Flash) |
 | `llm.api_key` | string | API key (local only) |
 | `codeagent.executable` | string | opencode executable (default `opencode`) |
 | `codeagent.agent_name` | string | Optional restricted agent name |

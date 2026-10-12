@@ -172,3 +172,33 @@ def test_async_request():
     assert kinds(events).count("run_experiment") == 2
     assert tuner.active
     tuner.abort()
+
+
+def test_waveform_recorded_and_sent():
+    events: list[tuple[str, dict]] = []
+    captured: dict = {}
+
+    def suggest(history, limits, setpoint):
+        captured["history"] = history
+        return Suggestion(5.0, 40.0, 0.1, "")
+
+    tuner = AutoTuner(lambda k, d: events.append((k, d)), async_mode=False)
+    tuner.start(4.0, 60.0, 0.05, max_iters=5, suggest=suggest, limits=LIMITS, setpoint=2.0)
+    waveform = {
+        "t": [0.0, 0.01],
+        "setpoint": [2.0, 2.0],
+        "feedback": [1.0, 1.1],
+        "u": [1.0, 2.0],
+        "up": [1.0, 1.5],
+        "ui": [0.0, 0.4],
+        "ud": [0.0, 0.1],
+    }
+    tuner.on_trial(
+        make_metrics(), {"kp": 4.0, "ki": 60.0, "kd": 0.05}, 2.0, waveform=waveform
+    )
+    tuner.tick()
+    tuner.on_trial(make_metrics(), {"kp": 5.0, "ki": 40.0, "kd": 0.1}, 2.0)
+    tuner.tick()
+    assert captured["history"][0]["waveform"]["t"] == [0.0, 0.01]
+    assert "waveform" not in captured["history"][1]
+    tuner.abort()

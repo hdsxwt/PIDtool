@@ -75,7 +75,13 @@ class AutoTuner:
         if self._active:
             self._graceful_finish("用户中止")
 
-    def on_trial(self, metrics: StepMetrics | None, gains: dict, setpoint: float) -> None:
+    def on_trial(
+        self,
+        metrics: StepMetrics | None,
+        gains: dict,
+        setpoint: float,
+        waveform: dict | None = None,
+    ) -> None:
         if not self._active:
             return
         score = score_metrics(metrics)
@@ -99,6 +105,8 @@ class AutoTuner:
                     "oscillating": metrics.oscillating,
                 }
             )
+        if waveform:
+            entry["waveform"] = waveform
         improved = self._best is None or score < float(self._best["score"]) - 1e-9
         if improved:
             self._best = {"score": score, "gains": dict(gains), "iteration": self._iteration}

@@ -86,6 +86,10 @@ best gains at the end**, early stop on oscillation or repeated degradation,
 abort anytime. The API key is stored only in the global config
 (`%APPDATA%/PIDtool/app.toml`).
 
+Optional data: tick "send downsampled raw waveform to AI" to attach ~80
+downsampled samples per round (t/sp/fb/u/up/ui/ud), helping the model judge
+response shape and output saturation; off by default (increases token usage).
+
 ### Code editing (opencode)
 
 Preconditions: the workspace is a git repo with no uncommitted tracked changes

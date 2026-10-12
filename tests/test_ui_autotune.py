@@ -44,12 +44,15 @@ def test_autotune_ui_flow(qapp, tmp_path):
     window.ai_measure_spin.setValue(0.6)
     window.ai_iters_spin.setValue(2)
     window.ai_target_spin.setValue(2.0)
+    window.ai_wave_check.setChecked(True)
     window.app_config.data["llm"]["api_key"] = "test-key"
 
     calls: list[int] = []
+    captured: list[dict] = []
 
     def fake_suggest(history, limits, setpoint):
         calls.append(len(history))
+        captured.append(dict(history[-1]))
         assert setpoint == 2.0
         return Suggestion(5.0, 40.0, 0.1, "fake suggestion")
 
@@ -62,6 +65,10 @@ def test_autotune_ui_flow(qapp, tmp_path):
     assert _wait_until(qapp, lambda: not window.tuner.active, timeout=60.0)
     assert window.ai_log.rowCount() == 2
     assert calls == [1]
+    assert captured[0].get("waveform")
+    waveform = captured[0]["waveform"]
+    assert 10 <= len(waveform["t"]) <= 90
+    assert len(waveform["feedback"]) == len(waveform["t"])
     assert window.ai_start_btn.isEnabled()
     assert not window.ai_abort_btn.isEnabled()
     assert "2 轮" in window.ai_status.text()

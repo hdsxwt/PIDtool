@@ -26,7 +26,7 @@
 | `recent_workspaces` | string[] | 最近打开的工作区（最多 10 个） |
 | `last_workspace` | string | 上次使用的工作区 |
 | `llm.base_url` | string | OpenAI 兼容端点（默认 `https://api.deepseek.com`） |
-| `llm.model` | string | 模型名（默认 `deepseek-chat`） |
+| `llm.model` | string | 模型名（默认 `deepseek-flash`，即 DeepSeek-V4.1-Flash） |
 | `llm.api_key` | string | API Key（仅存本机） |
 | `codeagent.executable` | string | opencode 可执行文件（默认 `opencode`） |
 | `codeagent.agent_name` | string | 可选的受限 agent 名称 |

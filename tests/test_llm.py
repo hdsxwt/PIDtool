@@ -56,3 +56,39 @@ def test_build_user_prompt_contains_history():
     assert "当前最优" in text
     assert "目标设定值: 2" in text
     assert "JSON" in text
+    assert "降采样波形" not in text
+
+
+def test_build_user_prompt_includes_waveform():
+    history = [
+        {
+            "iteration": 1,
+            "kp": 4.0,
+            "ki": 60.0,
+            "kd": 0.05,
+            "overshoot_pct": 5.0,
+            "rise_time": 0.05,
+            "settling_time": 0.5,
+            "steady_error": 0.001,
+            "oscillating": False,
+            "score": 12.0,
+            "waveform": {
+                "t": [0.0, 0.01],
+                "setpoint": [2.0, 2.0],
+                "feedback": [1.0, 1.2],
+                "u": [3.0, 4.0],
+                "up": [1.0, 2.0],
+                "ui": [1.0, 1.5],
+                "ud": [0.1, 0.1],
+            },
+        }
+    ]
+    limits = {
+        "kp": {"min": 0.0, "max": 500.0},
+        "ki": {"min": 0.0, "max": 5000.0},
+        "kd": {"min": 0.0, "max": 100.0},
+    }
+    text = build_user_prompt(history, limits, 2.0)
+    assert "降采样波形" in text
+    assert "0,2,1,3,1,1,0.1" in text
+    assert "0.01,2,1.2,4,2,1.5,0.1" in text

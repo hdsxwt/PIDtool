@@ -11,13 +11,16 @@ import tomli_w
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / "PIDtool"
 APP_CONFIG_PATH = APP_DIR / "app.toml"
 
+DEFAULT_LLM_MODEL = "deepseek-flash"
+LEGACY_LLM_MODELS = ("", "deepseek-chat")
+
 DEFAULT_APP_CONFIG: dict[str, Any] = {
     "recent_workspaces": [],
     "last_workspace": "",
     "llm": {
         "provider": "deepseek",
         "base_url": "https://api.deepseek.com",
-        "model": "deepseek-chat",
+        "model": DEFAULT_LLM_MODEL,
         "api_key": "",
     },
     "codeagent": {
@@ -57,6 +60,9 @@ class AppConfig:
                 self.data = _merge(self.data, raw)
             except (tomllib.TOMLDecodeError, OSError):
                 pass
+        llm = self.data.setdefault("llm", {})
+        if str(llm.get("model", "")).strip() in LEGACY_LLM_MODELS:
+            llm["model"] = DEFAULT_LLM_MODEL
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
