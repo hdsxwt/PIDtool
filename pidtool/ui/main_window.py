@@ -12,6 +12,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from serial.tools import list_ports
 
 from pidtool.ai.llm import DeepSeekTuner
+from pidtool.ai.plan import normalize_rounds
 from pidtool.ai.tuner import AutoTuner
 from pidtool.app_config import DEFAULT_LLM_MODEL, AppConfig
 from pidtool.codeagent import CodeEditSession, OpencodeAgent, build_code_prompt
@@ -98,8 +99,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._prompt_manual = False
         self._last_metrics: dict | None = None
         self._trial_records: list[dict] = []
-        self._ai_settle_s = 2.0
-        self._ai_countdown_s = 3.0
+        self._ai_action_ctx: dict | None = None
 
         self._build_toolbar()
         self._build_body()
@@ -361,18 +361,9 @@ class MainWindow(QtWidgets.QMainWindow):
         left = QtWidgets.QVBoxLayout()
         exp_group = QtWidgets.QGroupBox("自动调参")
         exp_form = QtWidgets.QFormLayout(exp_group)
-        self.ai_target_spin = QtWidgets.QDoubleSpinBox()
-        self.ai_target_spin.setDecimals(4)
-        self.ai_target_spin.setRange(-100000.0, 100000.0)
-        self.ai_target_spin.setValue(2.0)
-        self.ai_measure_spin = QtWidgets.QDoubleSpinBox()
-        self.ai_measure_spin.setRange(0.5, 120.0)
-        self.ai_measure_spin.setValue(4.0)
-        self.ai_measure_spin.setDecimals(1)
-        self.ai_measure_spin.setSuffix(" s")
         self.ai_wave_check = QtWidgets.QCheckBox("发送降采样原始波形给 AI")
         self.ai_wave_check.setToolTip(
-            "勾选后，每轮实验会附带约 80 点的降采样波形（t,sp,fb,u,up,ui,ud），"
+            "勾选后，每个动作会附带约 80 点的降采样波形（t,sp,fb,u,up,ui,ud），"
             "供 AI 分析响应形状与输出饱和；会增大 token 消耗"
         )
         plan_row = QtWidgets.QHBoxLayout()
@@ -383,9 +374,7 @@ class MainWindow(QtWidgets.QMainWindow):
         plan_row.addWidget(self.ai_plan_btn)
         plan_row.addWidget(self.ai_plan_summary)
         plan_row.addStretch(1)
-        exp_form.addRow("目标设定值", self.ai_target_spin)
         exp_form.addRow("测试方案", plan_row)
-        exp_form.addRow("单轮观测时长", self.ai_measure_spin)
         exp_form.addRow(self.ai_wave_check)
         button_row = QtWidgets.QHBoxLayout()
         self.ai_start_btn = QtWidgets.QPushButton("开始自动调参")
@@ -1125,29 +1114,37 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.link is None or self._capture_t0 is None:
             self._status("采集数据缺失，无法计算实验指标")
             return
+
+        def fail(message: str) -> None:
+            self._status(message)
+            if self.tuner.active:
+                self.tuner.on_trial(
+                    None, self._gains_dict(), float(self._capture_sp), kind=kind
+                )
+
         data = self._capture_snapshot()
         t = data["t"]
         if t.size < 50:
-            self._status("数据不足，无法计算实验指标")
+            fail("数据不足，无法计算实验指标")
             return
         t_end = self._capture_t1 if self._capture_t1 is not None else float(t[-1])
         mask = (t >= self._capture_t0 - 0.05) & (t <= t_end + 1e-6)
         tt = t[mask]
         yy = data["feedback"][mask].astype(float)
         if tt.size < 50:
-            self._status("采集窗口内数据不足，无法计算实验指标")
+            fail("采集窗口内数据不足，无法计算实验指标")
             return
         if kind == "disturbance":
             marks = {label: mt for mt, label in self._script_marks}
             disturb_start = marks.get(MARK_DISTURB_START)
             disturb_end = marks.get(MARK_DISTURB_END)
             if disturb_start is None or disturb_end is None or disturb_end <= disturb_start:
-                self._status("缺少扰动区间标记，无法计算扰动指标")
+                fail("缺少扰动区间标记，无法计算扰动指标")
                 return
             band = max(0.02 * abs(self._capture_sp), 0.01)
             m = analyze_disturbance(tt, yy, self._capture_sp, disturb_start, disturb_end, band)
             if m is None:
-                self._status("扰动指标计算失败（窗口无效）")
+                fail("扰动指标计算失败（窗口无效）")
                 return
             recovery = "—" if m.recovery_time != m.recovery_time else f"{m.recovery_time:.3f} s"
             rows = [
@@ -1195,7 +1192,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 yy = yy[keep]
             m = analyze_step(tt, yy, self._capture_sp)
             if m is None:
-                self._status("阶跃窗口无效（目标值与初始值过近）")
+                fail("阶跃窗口无效（目标值与初始值过近）")
                 return
             rows = self._step_metric_rows(m)
             trial = {
@@ -1221,6 +1218,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_metrics_rows(rows)
         self._status("实验指标已计算")
         self._last_metrics = trial["metrics"]
+        if self.tuner.active and self._ai_action_ctx:
+            trial["autotune"] = dict(self._ai_action_ctx)
         if self.workspace is not None:
             self.workspace.append_trial(trial)
             self._refresh_trials_table()
@@ -1320,11 +1319,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _plan_summary_text(self) -> str:
         auto = self.app_config.data.get("autotune", {})
-        plan = [str(kind) for kind in (auto.get("plan") or ["step"])]
-        loops = max(1, int(auto.get("loops", 1)))
-        steps = plan.count("step")
-        disturbances = plan.count("disturbance")
-        return f"阶跃×{steps}、扰动×{disturbances} · 循环{loops} → {len(plan) * loops} 轮"
+        rounds = normalize_rounds(auto.get("rounds"))
+        cycles = max(1, int(auto.get("cycles", 1) or 1))
+        steps = 0
+        disturbances = 0
+        for round_spec in rounds:
+            for action in round_spec["actions"]:
+                if str(action.get("kind")) == "disturbance":
+                    disturbances += 1
+                else:
+                    steps += 1
+        return (
+            f"每循环 {len(rounds)} 轮 × {cycles} = {len(rounds) * cycles} 轮 · "
+            f"阶跃×{steps}、扰动×{disturbances}"
+        )
 
     def _open_plan_dialog(self) -> None:
         values = dict(self.app_config.data.get("autotune", {}))
@@ -1334,11 +1342,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _apply_plan_settings(self, values: dict) -> None:
         auto = self.app_config.data.setdefault("autotune", {})
-        plan = [str(kind) for kind in values.get("plan", []) if str(kind) in ("step", "disturbance")]
-        auto["plan"] = plan or ["step"]
-        auto["loops"] = max(1, int(values.get("loops", 1)))
-        auto["disturb_s"] = float(values.get("disturb_s", 5.0))
-        auto["recover_s"] = float(values.get("recover_s", 4.0))
+        auto["schema"] = 2
+        auto["cycles"] = max(1, int(values.get("cycles", 1) or 1))
+        auto["rounds"] = normalize_rounds(values.get("rounds"))
+        for legacy in ("plan", "loops", "disturb_s", "recover_s"):
+            auto.pop(legacy, None)
         self.app_config.save()
         self.ai_plan_summary.setText(self._plan_summary_text())
         self._status("调参方案已保存（全局配置）")
@@ -1362,24 +1370,22 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(self, "AI 客户端初始化失败", str(exc))
             return
         auto = self.app_config.data.get("autotune", {})
-        plan = [str(kind) for kind in (auto.get("plan") or ["step"])]
+        rounds = normalize_rounds(auto.get("rounds"))
+        cycles = max(1, int(auto.get("cycles", 1) or 1))
         self.ai_log.setRowCount(0)
         self._ai_round_base = ""
+        self._ai_action_ctx = None
         self.ai_current_label.setText("准备中…")
-        self.sp_spin.setValue(self.ai_target_spin.value())
         self._set_ai_ui(True)
         try:
             self.tuner.start(
                 self.kp_spin.value(),
                 self.ki_spin.value(),
                 self.kd_spin.value(),
-                plan=plan,
-                loops=max(1, int(auto.get("loops", 1))),
+                rounds=rounds,
+                cycles=cycles,
                 suggest=suggest,
                 limits=copy.deepcopy(self.safety),
-                setpoint=self.ai_target_spin.value(),
-                disturb_s=float(auto.get("disturb_s", 5.0)),
-                recover_s=float(auto.get("recover_s", 4.0)),
             )
         except Exception as exc:
             self._set_ai_ui(False)
@@ -1407,50 +1413,53 @@ class MainWindow(QtWidgets.QMainWindow):
             kd = float(data.get("kd", 0.0))
             self._set_gain_spins(kp, ki, kd)
             self._apply_gains(silent=True)
-            round_no = int(data.get("round", 0))
-            total = int(data.get("total", 0))
-            if round_no and total and round_no <= total:
-                kind_label = "扰动" if data.get("kind") == "disturbance" else "阶跃"
+            if data.get("restore"):
+                self._ai_round_base = ""
+                self.ai_current_label.setText(
+                    f"恢复最优参数 Kp={kp:g} Ki={ki:g} Kd={kd:g}"
+                )
+            else:
+                kinds = "/".join(
+                    "扰动" if value == "disturbance" else "阶跃"
+                    for value in data.get("action_kinds", [])
+                )
                 self._ai_round_base = (
-                    f"第 {round_no}/{total} 轮 · {kind_label} · "
+                    f"循环 {data.get('cycle', 1)}/{data.get('cycles', 1)} · "
+                    f"第 {data.get('round_global', data.get('round', 1))}/"
+                    f"{data.get('round_total', 1)} 轮 · {kinds or '阶跃'} · "
                     f"Kp={kp:g} Ki={ki:g} Kd={kd:g}"
                 )
                 self.ai_current_label.setText(self._ai_round_base)
-            else:
-                self._ai_round_base = ""
-                self.ai_current_label.setText(f"恢复最优参数 Kp={kp:g} Ki={ki:g} Kd={kd:g}")
         elif kind == "run_experiment":
+            action = dict(data.get("action") or {})
+            self._ai_action_ctx = {
+                "cycle": int(data.get("cycle", 1)),
+                "round": int(data.get("round", 1)),
+                "round_global": int(data.get("round_global", 1)),
+                "action_index": int(data.get("action_index", 1)),
+                "action_total": int(data.get("action_total", 1)),
+                "action_kind": str(action.get("kind", "step")),
+            }
             if self._ai_round_base:
-                self.ai_current_label.setText(f"{self._ai_round_base}（测试中）")
-            experiment_kind = str(data.get("kind", "step"))
-            if experiment_kind == "disturbance":
-                script = autotune_disturbance_script(
-                    self.ai_target_spin.value(),
-                    settle_s=self._ai_settle_s,
-                    countdown_s=self._ai_countdown_s,
-                    disturb_s=float(data.get("disturb_s", 5.0)),
-                    recover_s=float(data.get("recover_s", 4.0)),
+                label = "扰动" if action.get("kind") == "disturbance" else "阶跃"
+                self.ai_current_label.setText(
+                    f"{self._ai_round_base}"
+                    f"（动作 {self._ai_action_ctx['action_index']}/"
+                    f"{self._ai_action_ctx['action_total']} · {label} 测试中）"
                 )
-            else:
-                script = autotune_step_script(
-                    self.ai_target_spin.value(),
-                    settle_s=self._ai_settle_s,
-                    countdown_s=self._ai_countdown_s,
-                    measure_s=self.ai_measure_spin.value(),
-                )
-            self._run_script(script)
+            self._run_script(self._build_autotune_script(action))
         elif kind == "pause_motor":
             if self.link is not None and self.link.is_open:
                 self._set_mode(MODE_IDLE, silent=True)
             if self._ai_round_base:
                 self.ai_current_label.setText(f"{self._ai_round_base}（等待 AI 建议…）")
         elif kind == "iteration":
-            self._append_ai_log_row(data)
+            self._append_ai_log_rows(data)
         elif kind == "finished":
             self._set_ai_ui(False)
             best = data.get("best_gains")
             score = data.get("best_score")
-            text = f"{data.get('reason', '完成')}；共 {data.get('iterations', 0)} 轮"
+            text = f"{data.get('reason', '完成')}；共 {data.get('rounds', 0)} 轮"
             if best is not None and score is not None:
                 text += (
                     f"，最优评分 {score:.2f} "
@@ -1466,31 +1475,57 @@ class MainWindow(QtWidgets.QMainWindow):
             self._status(text)
             self._refresh_trials_table()
 
-    def _append_ai_log_row(self, entry: dict) -> None:
-        row = self.ai_log.rowCount()
-        self.ai_log.insertRow(row)
-        kind = entry.get("kind", "step")
+    def _build_autotune_script(self, action: dict):
+        kind = str(action.get("kind", "step"))
         if kind == "disturbance":
-            kind_label = "扰动"
-            main_metric = _fmt_num(entry.get("max_deviation"), ".4g")
-            timing = _fmt_num(entry.get("recovery_time"), ".3f")
-        else:
-            kind_label = "阶跃"
-            main_metric = _fmt_num(entry.get("overshoot_pct"), ".2f")
-            timing = _fmt_num(entry.get("settling_time"), ".3f")
-        values = [
-            str(entry.get("iteration", "")),
-            kind_label,
-            _fmt_num(entry.get("kp"), ".4g"),
-            _fmt_num(entry.get("ki"), ".4g"),
-            _fmt_num(entry.get("kd"), ".4g"),
-            _fmt_num(entry.get("score"), ".2f"),
-            main_metric,
-            timing,
-            "当前最优" if entry.get("best") else "",
-        ]
-        for col, text in enumerate(values):
-            self.ai_log.setItem(row, col, QtWidgets.QTableWidgetItem(text))
+            return autotune_disturbance_script(
+                float(action.get("target_sp", 2.0)),
+                settle_s=float(action.get("settle_s", 2.0)),
+                countdown_s=float(action.get("countdown_s", 3.0)),
+                disturb_s=float(action.get("disturb_s", 5.0)),
+                recover_s=float(action.get("recover_s", 4.0)),
+            )
+        return autotune_step_script(
+            float(action.get("target_sp", 2.0)),
+            baseline_sp=float(action.get("baseline_sp", 0.0)),
+            settle_s=float(action.get("settle_s", 2.0)),
+            countdown_s=float(action.get("countdown_s", 3.0)),
+            measure_s=float(action.get("measure_s", 3.0)),
+        )
+
+    def _append_ai_log_rows(self, entry: dict) -> None:
+        actions = entry.get("actions") or []
+        total = max(1, len(actions))
+        for index, action in enumerate(actions, 1):
+            row = self.ai_log.rowCount()
+            self.ai_log.insertRow(row)
+            kind = action.get("kind", "step")
+            if kind == "disturbance":
+                kind_label = "扰动"
+                main_metric = _fmt_num(action.get("max_deviation"), ".4g")
+                timing = _fmt_num(action.get("recovery_time"), ".3f")
+            else:
+                kind_label = "阶跃"
+                main_metric = _fmt_num(action.get("overshoot_pct"), ".2f")
+                timing = _fmt_num(action.get("settling_time"), ".3f")
+            note = f"目标 {_fmt_num(action.get('setpoint'), '.4g')}"
+            if index == total:
+                note += f" · 轮评分 {_fmt_num(entry.get('score'), '.2f')}"
+                if entry.get("best"):
+                    note += " · 当前最优"
+            values = [
+                f"{entry.get('round_global', entry.get('iteration', ''))}·{index}/{total}",
+                kind_label,
+                _fmt_num(entry.get("kp"), ".4g"),
+                _fmt_num(entry.get("ki"), ".4g"),
+                _fmt_num(entry.get("kd"), ".4g"),
+                _fmt_num(action.get("score"), ".2f"),
+                main_metric,
+                timing,
+                note,
+            ]
+            for col, text in enumerate(values):
+                self.ai_log.setItem(row, col, QtWidgets.QTableWidgetItem(text))
 
     def _refresh_trials_table(self) -> None:
         self.trials_table.setRowCount(0)

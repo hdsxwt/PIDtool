@@ -651,12 +651,16 @@ def test_open_dialogs_accepted(window, monkeypatch):
             return QtWidgets.QDialog.DialogCode.Accepted
 
         def values(self):
-            return {"plan": ["disturbance"], "loops": 3, "disturb_s": 2.0, "recover_s": 1.0}
+            return {
+                "cycles": 3,
+                "rounds": [{"name": "轮次 1", "actions": [{"kind": "disturbance"}]}],
+            }
 
     monkeypatch.setattr(mw, "AutotunePlanDialog", FakePlanDialog)
     window._open_plan_dialog()
-    assert window.app_config.data["autotune"]["plan"] == ["disturbance"]
-    assert "→ 3 轮" in window.ai_plan_summary.text()
+    assert window.app_config.data["autotune"]["cycles"] == 3
+    assert window.app_config.data["autotune"]["rounds"][0]["actions"][0]["kind"] == "disturbance"
+    assert "3 轮" in window.ai_plan_summary.text()
 
 
 def test_open_dialogs_rejected(window, monkeypatch):
@@ -716,7 +720,7 @@ def test_start_autotune_guards(qapp, tmp_path, modal_recorder):
         win._start_autotune()
         assert "AI 客户端初始化失败" in modal_recorder[-1][1]
 
-        win._make_suggest = lambda: (lambda history, limits, setpoint: None)
+        win._make_suggest = lambda: (lambda history, limits: None)
 
         def start_boom(*args, **kwargs):
             raise RuntimeError("start boom")
@@ -737,15 +741,24 @@ def test_start_autotune_and_abort(qapp, tmp_path):
         win._connect()
         win.app_config.data["llm"]["api_key"] = "k"
         win.app_config.data["autotune"] = {
-            "plan": ["step"],
-            "loops": 1,
-            "disturb_s": 1.0,
-            "recover_s": 1.0,
+            "cycles": 1,
+            "rounds": [
+                {
+                    "name": "轮次 1",
+                    "actions": [
+                        {
+                            "kind": "step",
+                            "baseline_sp": 0.0,
+                            "target_sp": 2.0,
+                            "settle_s": 0.2,
+                            "countdown_s": 0.2,
+                            "measure_s": 0.5,
+                        }
+                    ],
+                }
+            ],
         }
-        win._ai_settle_s = 0.2
-        win._ai_countdown_s = 0.2
-        win.ai_measure_spin.setValue(0.5)
-        win._make_suggest = lambda: (lambda history, limits, setpoint: None)
+        win._make_suggest = lambda: (lambda history, limits: None)
         win._start_autotune()
         assert win.tuner.active
         assert not win.ai_start_btn.isEnabled()
@@ -770,27 +783,57 @@ def test_abort_autotune_aborts_runner(mock_window):
 def test_tuner_events_restore_and_finished(window):
     window._on_tuner_event("status", {"text": "正在请求 AI 建议…"})
     assert window.ai_status.text() == "正在请求 AI 建议…"
-    window._on_tuner_event("apply_gains", {"kp": 1.0, "ki": 2.0, "kd": 0.3})
+    window._on_tuner_event("apply_gains", {"kp": 1.0, "ki": 2.0, "kd": 0.3, "restore": True})
     assert "恢复最优参数" in window.ai_current_label.text()
-    window._on_tuner_event("apply_gains", {"kp": 4.0, "ki": 60.0, "kd": 0.05, "round": 1, "total": 2, "kind": "step"})
-    assert "第 1/2 轮" in window.ai_current_label.text()
-    window._on_tuner_event("run_experiment", {"kind": "step"})
+    window._on_tuner_event(
+        "apply_gains",
+        {
+            "kp": 4.0,
+            "ki": 60.0,
+            "kd": 0.05,
+            "restore": False,
+            "cycle": 1,
+            "cycles": 2,
+            "round": 1,
+            "round_global": 1,
+            "round_total": 4,
+            "action_kinds": ["step", "disturbance"],
+            "action_total": 2,
+        },
+    )
+    assert "第 1/4 轮" in window.ai_current_label.text()
+    assert "阶跃/扰动" in window.ai_current_label.text()
+    window._on_tuner_event(
+        "run_experiment",
+        {
+            "cycle": 1,
+            "round": 1,
+            "round_global": 1,
+            "action_index": 1,
+            "action_total": 2,
+            "action": {"kind": "step", "target_sp": 2.0},
+        },
+    )
     assert "测试中" in window.ai_current_label.text()
+    assert "动作 1/2" in window.ai_current_label.text()
     window._on_tuner_event("pause_motor", {})
     assert "等待 AI 建议" in window.ai_current_label.text()
-    window._on_tuner_event("finished", {"reason": "完成", "iterations": 0, "best_gains": None, "best_score": None})
+    window._on_tuner_event(
+        "finished", {"reason": "完成", "rounds": 0, "best_gains": None, "best_score": None}
+    )
     assert window.ai_current_label.text() == "—"
     window._on_tuner_event(
         "finished",
         {
             "reason": "完成全部轮次",
-            "iterations": 2,
+            "rounds": 2,
             "best_gains": {"kp": 4.0, "ki": 60.0, "kd": 0.05},
             "best_score": 12.5,
         },
     )
     assert "最优参数" in window.ai_current_label.text()
     assert "12.50" in window.ai_current_label.text()
+    assert "共 2 轮" in window.ai_status.text()
 
 
 def test_tuner_iteration_log_rows(window):
@@ -798,34 +841,39 @@ def test_tuner_iteration_log_rows(window):
         "iteration",
         {
             "iteration": 1,
-            "kind": "step",
+            "round_global": 1,
+            "cycle": 1,
+            "round": 1,
             "kp": 4.0,
             "ki": 60.0,
             "kd": 0.05,
             "score": 12.3,
-            "overshoot_pct": 5.4,
-            "settling_time": 0.75,
             "best": True,
-        },
-    )
-    window._on_tuner_event(
-        "iteration",
-        {
-            "iteration": 2,
-            "kind": "disturbance",
-            "kp": 5.0,
-            "ki": 40.0,
-            "kd": 0.1,
-            "score": 23.1,
-            "max_deviation": 0.32,
-            "recovery_time": 1.35,
+            "actions": [
+                {
+                    "kind": "step",
+                    "setpoint": 2.0,
+                    "score": 11.0,
+                    "overshoot_pct": 5.4,
+                    "settling_time": 0.75,
+                },
+                {
+                    "kind": "disturbance",
+                    "setpoint": 2.0,
+                    "score": 13.6,
+                    "max_deviation": 0.32,
+                    "recovery_time": 1.35,
+                },
+            ],
         },
     )
     assert window.ai_log.rowCount() == 2
+    assert window.ai_log.item(0, 0).text() == "1·1/2"
     assert window.ai_log.item(0, 1).text() == "阶跃"
-    assert window.ai_log.item(0, 8).text() == "当前最优"
     assert window.ai_log.item(1, 1).text() == "扰动"
     assert window.ai_log.item(1, 6).text() == "0.32"
+    assert "轮评分 12.30" in window.ai_log.item(1, 8).text()
+    assert "当前最优" in window.ai_log.item(1, 8).text()
 
 
 def test_refresh_trials_without_workspace(qapp, tmp_path):

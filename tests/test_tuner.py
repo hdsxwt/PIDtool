@@ -135,6 +135,7 @@ def test_multi_action_round_requests_ai_once():
     assert runs[0]["round_total"] == 2
 
     tuner.on_trial(make_metrics(), {"kp": 4.0, "ki": 60.0, "kd": 0.05}, 2.0)
+    tuner.tick()
     runs = [d for k, d in events if k == "run_experiment"]
     assert len(runs) == 2
     assert runs[1]["action"]["kind"] == "disturbance"

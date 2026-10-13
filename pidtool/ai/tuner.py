@@ -32,6 +32,7 @@ class AutoTuner:
         self._round_index = 0
         self._action_index = 0
         self._round_buffer: list[dict] = []
+        self._pending_experiment = False
         self._history: list[dict] = []
         self._best: dict | None = None
         self._worse_streak = 0
@@ -69,6 +70,7 @@ class AutoTuner:
         self._round_index = 0
         self._action_index = 0
         self._round_buffer = []
+        self._pending_experiment = False
         self._worse_streak = 0
         self._osc_streak = 0
         self._result = None
@@ -138,11 +140,12 @@ class AutoTuner:
         actions = self._current_actions()
         if self._action_index + 1 < len(actions):
             self._action_index += 1
-            self._on_event("run_experiment", self._experiment_payload())
+            self._pending_experiment = True
             return
 
         completed_meta = self._round_meta()
         self._round_index += 1
+        self._pending_experiment = False
         scores = [float(item["score"]) for item in self._round_buffer]
         round_score = aggregate_round_score(scores)
         round_entry: dict = {
@@ -191,6 +194,10 @@ class AutoTuner:
 
     def tick(self) -> None:
         if not self._active:
+            return
+        if self._pending_experiment:
+            self._pending_experiment = False
+            self._on_event("run_experiment", self._experiment_payload())
             return
         if self._worker is not None or self._result is None:
             return
@@ -315,6 +322,7 @@ class AutoTuner:
         self._worker = None
         self._round_buffer = []
         self._action_index = 0
+        self._pending_experiment = False
         self._on_event("pause_motor", {})
         self._on_event(
             "finished",
