@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -43,6 +44,48 @@ def _creation_flags() -> int:
     return getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+def flatten_prompt(prompt: str) -> str:
+    """Collapse a prompt to a single line for command-line transport.
+
+    Batch launchers run through cmd.exe split arguments on newlines, so a
+    multi-line prompt arrives truncated at the first line.
+    """
+    return " ".join(line.strip() for line in prompt.splitlines() if line.strip())
+
+
+_SIMPLE_SHIM = re.compile(r'^\s*"([^"]+\.exe)"\s+%\*\s*$', re.IGNORECASE)
+
+
+def _extract_shim_target(path: Path) -> str | None:
+    """Return the .exe a simple forwarding batch shim points at, else None.
+
+    Running the target directly avoids cmd.exe argument mangling
+    (newline truncation, %VAR% expansion) for launchers like
+    ``@echo off\\n"C:\\...\\opencode.exe" %*``.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    target: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip().lstrip("\ufeff")
+        if not line or line.lower() in ("@echo off", "echo off"):
+            continue
+        if line.startswith("::") or line.lower().startswith("rem "):
+            continue
+        match = _SIMPLE_SHIM.match(line)
+        if match is None or target is not None:
+            return None
+        target = match.group(1).strip()
+    if not target:
+        return None
+    candidate = Path(target)
+    if not candidate.is_absolute() or not candidate.is_file():
+        return None
+    return str(candidate)
+
+
 class OpencodeAgent:
     name = "opencode"
 
@@ -68,6 +111,9 @@ class OpencodeAgent:
         resolved = str(resolved_path)
         if resolved.lower().endswith((".bat", ".cmd")):
             self._check_batch_forwards_args(Path(resolved))
+            direct = _extract_shim_target(Path(resolved))
+            if direct is not None:
+                return [direct]
             return [os.environ.get("COMSPEC", "cmd.exe"), "/c", resolved]
         return [resolved]
 
@@ -92,7 +138,7 @@ class OpencodeAgent:
         if self.agent_name:
             command += ["--agent", self.agent_name]
         command += self.extra_args
-        command.append(prompt)
+        command.append(flatten_prompt(prompt))
         return command
 
     def run(

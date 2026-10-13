@@ -153,6 +153,34 @@ def test_opencode_bat_wrapping(tmp_path):
     assert command[2] == str(bat)
 
 
+def test_simple_bat_shim_runs_target_exe_directly(tmp_path):
+    bat = tmp_path / "opencode.bat"
+    bat.write_text(f'@echo off\n"{sys.executable}" %*\n', encoding="utf-8")
+    agent = OpencodeAgent(executable=str(bat))
+    command = agent.build_command("x", tmp_path)
+    assert command[0] == sys.executable
+    assert command[1:3] == ["run", "--dir"]
+
+
+def test_complex_bat_shim_falls_back_to_cmd(tmp_path):
+    bat = tmp_path / "opencode.cmd"
+    bat.write_text(
+        f'@echo off\nset FOO=1\n"{sys.executable}" %*\n', encoding="utf-8"
+    )
+    agent = OpencodeAgent(executable=str(bat))
+    command = agent.build_command("x", tmp_path)
+    assert command[0].lower().endswith("cmd.exe")
+    assert command[2] == str(bat)
+
+
+def test_build_command_flattens_multiline_prompt(tmp_path):
+    agent = OpencodeAgent(executable=sys.executable, timeout=5)
+    prompt = "你是嵌入式工程师。\n\n修改需求:\n把 Kp 改为 5"
+    command = agent.build_command(prompt, tmp_path)
+    assert command[-1] == "你是嵌入式工程师。 修改需求: 把 Kp 改为 5"
+    assert "\n" not in command[-1]
+
+
 def test_batch_without_arg_forwarding_rejected(tmp_path):
     bat = tmp_path / "opencode.bat"
     bat.write_text('"opencode.exe"\n', encoding="utf-8")
