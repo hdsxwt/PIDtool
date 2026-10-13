@@ -207,17 +207,40 @@ class DefaultProtocolAdapter(ProtocolAdapter):
         return samples, events
 
 
-def load_adapter(spec: str) -> ProtocolAdapter:
+def parse_adapter_spec(spec: str) -> tuple[str, str] | None:
     spec = (spec or "default").strip()
     if spec == "default":
-        return DefaultProtocolAdapter()
-    path = Path(spec)
+        return None
+    path_part = spec
     cls_name = "Adapter"
-    if not path.is_file():
-        path_part, _, maybe_cls = spec.rpartition(":")
-        path = Path(path_part)
-        if maybe_cls:
-            cls_name = maybe_cls
+    if not Path(spec).is_file():
+        head, _, tail = spec.rpartition(":")
+        if head:
+            path_part = head
+            if tail:
+                cls_name = tail
+    return path_part, cls_name
+
+
+def resolve_adapter_path(spec: str, base_dir: Path | None = None) -> Path | None:
+    parsed = parse_adapter_spec(spec)
+    if parsed is None:
+        return None
+    path = Path(parsed[0])
+    if not path.is_absolute() and base_dir is not None:
+        path = Path(base_dir) / path
+    return path.resolve()
+
+
+def load_adapter(spec: str, base_dir: Path | None = None) -> ProtocolAdapter:
+    parsed = parse_adapter_spec(spec)
+    if parsed is None:
+        return DefaultProtocolAdapter()
+    path_part, cls_name = parsed
+    path = Path(path_part)
+    if not path.is_absolute() and base_dir is not None:
+        path = Path(base_dir) / path
+    path = path.resolve()
     if not path.is_file():
         raise FileNotFoundError(f"适配器模块不存在: {path}")
     module_name = f"pidtool_adapter_{path.stem}"

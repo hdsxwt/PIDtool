@@ -49,7 +49,12 @@ adapter = "D:/firmware/pid_adapter.py:Adapter"
 ```
 
 - Format: `adapter_file.py:ClassName`; path-only defaults to class `Adapter`
-- Windows drive-letter colons are handled (whole-path match takes priority)
+- Relative paths resolve against the **workspace root**; Windows drive-letter
+  colons are handled
+- Safety: a custom adapter runs Python code with your privileges. On first
+  connect a dialog shows the absolute path and file hash for confirmation;
+  once confirmed it is remembered as path+content-hash, and the file changing
+  triggers a new prompt (stored in the global `%APPDATA%/PIDtool/app.toml`)
 - Reconnect the link to apply
 
 ## 3. Full Example (ASCII line protocol)

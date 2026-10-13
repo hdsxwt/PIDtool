@@ -35,6 +35,7 @@ DEFAULT_APP_CONFIG: dict[str, Any] = {
         "agent_name": "",
         "timeout_s": 900,
         "auto_approve": True,
+        "approved_adapters": {},
     },
     "autotune": DEFAULT_AUTOTUNE,
     "ui": {"window_s": 10.0},

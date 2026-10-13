@@ -1141,3 +1141,71 @@ def test_metrics_dict_and_rows(window):
 def test_ensure_link_silent(window):
     assert not window._ensure_link(silent=True)
     assert not window._ensure_link()
+
+
+ADAPTER_SOURCE = (
+    "from pidtool.link.protocol import DefaultProtocolAdapter\n"
+    "\n"
+    "class Adapter(DefaultProtocolAdapter):\n"
+    "    name = \"workspace-custom\"\n"
+)
+
+
+def _configure_custom_adapter(window: MainWindow) -> Path:
+    adapter_path = window.workspace.root / "adapter.py"
+    adapter_path.write_text(ADAPTER_SOURCE, encoding="utf-8")
+    settings = window.workspace.load_settings()
+    settings["serial"]["adapter"] = "adapter.py:Adapter"
+    window.workspace.save_settings(settings)
+    return adapter_path
+
+
+def test_custom_adapter_confirmation_remembers_hash(qapp, window, modal_recorder):
+    adapter_path = _configure_custom_adapter(window)
+
+    window._connect()
+    assert window.link is not None and window.link.is_open
+    assert window.link.adapter.name == "workspace-custom"
+    questions = [call for call in modal_recorder if call[0] == "question"]
+    assert len(questions) == 1
+    assert str(adapter_path.resolve()) in questions[0][2]
+    approved = window.app_config.data["codeagent"]["approved_adapters"]
+    assert set(approved) == {str(adapter_path.resolve())}
+
+    window._disconnect()
+    window._connect()
+    assert len([call for call in modal_recorder if call[0] == "question"]) == 1
+    window._disconnect()
+
+
+def test_custom_adapter_declined_blocks_connect(qapp, window, monkeypatch):
+    _configure_custom_adapter(window)
+
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        staticmethod(lambda *a, **k: QtWidgets.QMessageBox.StandardButton.No),
+    )
+    window._connect()
+    assert window.link is None
+    assert window.app_config.data["codeagent"].get("approved_adapters", {}) == {}
+
+
+def test_custom_adapter_reasked_when_file_changes(qapp, window, modal_recorder):
+    adapter_path = _configure_custom_adapter(window)
+
+    window._connect()
+    assert window.link is not None
+    first = window.app_config.data["codeagent"]["approved_adapters"][
+        str(adapter_path.resolve())
+    ]
+    window._disconnect()
+
+    adapter_path.write_text(ADAPTER_SOURCE + "\n# changed\n", encoding="utf-8")
+    window._connect()
+    assert len([call for call in modal_recorder if call[0] == "question"]) == 2
+    second = window.app_config.data["codeagent"]["approved_adapters"][
+        str(adapter_path.resolve())
+    ]
+    assert first != second
+    window._disconnect()

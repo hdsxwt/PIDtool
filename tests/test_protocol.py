@@ -28,6 +28,7 @@ from pidtool.link.protocol import (
     crc16_ccitt,
     encode_frame,
     load_adapter,
+    resolve_adapter_path,
 )
 
 
@@ -263,3 +264,26 @@ def test_load_adapter_unsupported_module(tmp_path):
 def test_load_adapter_defaults_to_default_when_blank():
     assert isinstance(load_adapter(""), DefaultProtocolAdapter)
     assert isinstance(load_adapter("  default  "), DefaultProtocolAdapter)
+
+
+def test_resolve_adapter_path(tmp_path):
+    assert resolve_adapter_path("default", tmp_path) is None
+    assert resolve_adapter_path("", tmp_path) is None
+    nested = tmp_path / "sub"
+    nested.mkdir()
+    target = nested / "a.py"
+    target.write_text("x = 1\n", encoding="utf-8")
+    assert resolve_adapter_path("sub/a.py:MyClass", tmp_path) == target.resolve()
+    assert resolve_adapter_path(f"{target}:MyClass", None) == target.resolve()
+    assert resolve_adapter_path("sub/a.py", tmp_path) == target.resolve()
+
+
+def test_load_adapter_relative_to_base_dir(tmp_path):
+    (tmp_path / "padapter.py").write_text(
+        "from pidtool.link.protocol import DefaultProtocolAdapter\n"
+        "class Adapter(DefaultProtocolAdapter):\n"
+        "    name = \"relative\"\n",
+        encoding="utf-8",
+    )
+    adapter = load_adapter("padapter.py", base_dir=tmp_path)
+    assert adapter.name == "relative"

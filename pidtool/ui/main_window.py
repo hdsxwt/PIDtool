@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import os
 import sys
 from datetime import datetime
@@ -27,7 +28,7 @@ from pidtool.core.experiments.specs import MARK_DISTURB_END, MARK_DISTURB_START,
 from pidtool.core.export import export_artifacts
 from pidtool.core.metrics import StepMetrics, analyze_disturbance, analyze_step
 from pidtool.link.mock_link import MockLink
-from pidtool.link.protocol import MODE_IDLE, MODE_RUN, load_adapter
+from pidtool.link.protocol import MODE_IDLE, MODE_RUN, load_adapter, resolve_adapter_path
 from pidtool.link.serial_link import LinkBase, SerialLink
 from pidtool.ui.plots import PlotPanel
 from pidtool.workspace import DEFAULT_SETTINGS, Workspace, ensure_gitignore
@@ -683,14 +684,57 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self._connect()
 
+    @staticmethod
+    def _file_sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _adapter_approved(self, path_str: str, digest: str) -> bool:
+        approved = self.app_config.data.get("codeagent", {}).get("approved_adapters", {})
+        return str(approved.get(path_str, "")) == digest
+
+    def _remember_adapter(self, path_str: str, digest: str) -> None:
+        codeagent = self.app_config.data.setdefault("codeagent", {})
+        approved = codeagent.setdefault("approved_adapters", {})
+        approved[path_str] = digest
+        self.app_config.save()
+
+    def _load_adapter_with_consent(self, adapter_spec: str):
+        base_dir = self.workspace.root if self.workspace is not None else None
+        path = resolve_adapter_path(adapter_spec, base_dir)
+        if path is not None:
+            if not path.is_file():
+                raise FileNotFoundError(f"适配器模块不存在: {path}")
+            digest = self._file_sha256(path)
+            if not self._adapter_approved(str(path), digest):
+                answer = QtWidgets.QMessageBox.question(
+                    self,
+                    "自定义适配器确认",
+                    "该工作区配置了自定义协议适配器，将在本机以你的权限执行该 Python 文件：\n\n"
+                    f"{path}\n\nSHA-256: {digest[:16]}…\n\n"
+                    "仅在信任该文件（或信任该固件仓库来源）时继续。\n"
+                    "点击“是”信任并记住该文件内容；文件内容变化后会再次询问。",
+                )
+                if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+                    self._status("已取消：未确认自定义适配器")
+                    return None
+                self._remember_adapter(str(path), digest)
+                self._status(f"已记住适配器: {path}")
+        return load_adapter(adapter_spec, base_dir)
+
     def _connect(self) -> None:
         adapter_spec = "default"
         if self.workspace is not None:
             adapter_spec = self.workspace.load_settings()["serial"].get("adapter", "default")
         try:
-            adapter = load_adapter(adapter_spec)
+            adapter = self._load_adapter_with_consent(adapter_spec)
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, "适配器加载失败", str(exc))
+            return
+        if adapter is None:
             return
         link_type = self.link_combo.currentData()
         if link_type == "serial":
