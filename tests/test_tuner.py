@@ -59,22 +59,32 @@ def test_iteration_flow_and_best_restore():
         setpoint=2.0,
     )
     assert kinds(events) == ["status", "apply_gains", "run_experiment"]
-    assert events[1][1] == {"kp": 4.0, "ki": 60.0, "kd": 0.05}
+    assert events[1][1]["kp"] == 4.0
+    assert events[1][1]["ki"] == 60.0
+    assert events[1][1]["kd"] == 0.05
+    assert events[1][1]["round"] == 1
+    assert events[1][1]["total"] == 3
+    assert events[1][1]["kind"] == "step"
 
     tuner.on_trial(make_metrics(overshoot=8.0), {"kp": 4.0, "ki": 60.0, "kd": 0.05}, 2.0)
     tuner.tick()
     assert kinds(events)[-2:] == ["apply_gains", "run_experiment"]
     assert events[-1][0] == "run_experiment"
-    assert events[-2][1] == {"kp": 5.0, "ki": 40.0, "kd": 0.1}
+    assert events[-2][1]["kp"] == 5.0
+    assert events[-2][1]["ki"] == 40.0
+    assert events[-2][1]["kd"] == 0.1
+    assert events[-2][1]["round"] == 2
 
     tuner.on_trial(make_metrics(overshoot=3.0, settle=0.4), {"kp": 5.0, "ki": 40.0, "kd": 0.1}, 2.0)
     tuner.tick()
-    assert events[-2][1] == {"kp": 6.0, "ki": 30.0, "kd": 0.2}
+    assert events[-2][1]["kp"] == 6.0
 
     tuner.on_trial(make_metrics(overshoot=15.0), {"kp": 6.0, "ki": 30.0, "kd": 0.2}, 2.0)
     assert not tuner.active
     assert kinds(events)[-3:] == ["apply_gains", "pause_motor", "finished"]
-    assert events[-3][1] == {"kp": 5.0, "ki": 40.0, "kd": 0.1}
+    assert events[-3][1]["kp"] == 5.0
+    assert events[-3][1]["round"] == 4
+    assert events[-3][1]["round"] > events[-3][1]["total"]
     finished = events[-1][1]
     assert finished["reason"] == "完成全部轮次"
     assert finished["iterations"] == 3
@@ -102,7 +112,9 @@ def test_suggestion_clamped_to_limits():
     tuner.on_trial(make_metrics(), {"kp": 1.0, "ki": 1.0, "kd": 0.0}, 1.0)
     tuner.tick()
     applies = [d for k, d in events if k == "apply_gains"]
-    assert applies[-1] == {"kp": 100.0, "ki": 0.0, "kd": 10.0}
+    assert applies[-1]["kp"] == 100.0
+    assert applies[-1]["ki"] == 0.0
+    assert applies[-1]["kd"] == 10.0
 
 
 def test_stops_after_two_oscillating_trials():
@@ -276,6 +288,16 @@ def test_mixed_plan_sequence_and_finish():
     assert finished["reason"] == "完成全部轮次"
     assert finished["iterations"] == 4
     assert finished["best_gains"] is not None
+    apply_payloads = [d for k, d in events if k == "apply_gains"]
+    assert [d["round"] for d in apply_payloads] == [1, 2, 3, 4, 5]
+    assert [d["kind"] for d in apply_payloads] == [
+        "step",
+        "disturbance",
+        "step",
+        "disturbance",
+        "disturbance",
+    ]
+    assert apply_payloads[-1]["kp"] == 4.0
     iterations = [d for k, d in events if k == "iteration"]
     assert [d["kind"] for d in iterations] == ["step", "disturbance", "step", "disturbance"]
     assert "max_deviation" in iterations[1]

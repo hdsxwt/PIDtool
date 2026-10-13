@@ -224,7 +224,13 @@ class AutoTuner:
         return max(low, min(high, value))
 
     def _emit_apply(self, gains: dict) -> None:
-        self._on_event("apply_gains", dict(gains))
+        index = min(self._iteration, self._total - 1) if self._sequence else 0
+        kind = self._sequence[index] if self._sequence else "step"
+        payload = dict(gains)
+        payload["round"] = self._iteration + 1
+        payload["total"] = self._total
+        payload["kind"] = kind
+        self._on_event("apply_gains", payload)
 
     def _graceful_finish(self, reason: str) -> None:
         best = self._best

@@ -63,12 +63,15 @@ def test_autotune_ui_flow(qapp, tmp_path):
         return Suggestion(5.0, 40.0, 0.1, "fake suggestion")
 
     observed_modes: list[int] = []
+    observed_labels: list[str] = []
     original_handler = window._on_tuner_event
 
     def spy(kind, data):
         original_handler(kind, data)
-        if kind == "pause_motor" and window.link is not None:
-            observed_modes.append(window.link.mode)
+        if kind == "pause_motor":
+            if window.link is not None:
+                observed_modes.append(window.link.mode)
+            observed_labels.append(window.ai_current_label.text())
 
     window.tuner._on_event = spy
     window._make_suggest = lambda: fake_suggest
@@ -76,6 +79,9 @@ def test_autotune_ui_flow(qapp, tmp_path):
     assert window.tuner.active
     assert not window.ai_start_btn.isEnabled()
     assert window.ai_abort_btn.isEnabled()
+    assert "第 1/2 轮" in window.ai_current_label.text()
+    assert "阶跃" in window.ai_current_label.text()
+    assert "Kp=4" in window.ai_current_label.text()
 
     assert _wait_until(qapp, lambda: not window.tuner.active, timeout=60.0)
     assert window.ai_log.rowCount() == 2
@@ -89,6 +95,8 @@ def test_autotune_ui_flow(qapp, tmp_path):
     assert "2 轮" in window.ai_status.text()
     assert len(observed_modes) >= 2
     assert all(mode == MODE_IDLE for mode in observed_modes)
+    assert any("等待 AI 建议" in text for text in observed_labels)
+    assert "最优参数" in window.ai_current_label.text()
     assert window.link.mode == MODE_IDLE
 
     trials = [t for t in window.workspace.read_trials() if t.get("kind") == "script_step"]
@@ -126,11 +134,16 @@ def test_autotune_mixed_plan_ui(qapp, tmp_path):
     window._make_suggest = lambda: fake_suggest
     window._start_autotune()
     assert window.tuner.active
+    assert "第 1/2 轮" in window.ai_current_label.text()
+    assert "阶跃" in window.ai_current_label.text()
 
     deadline = time.time() + 40.0
+    banner_texts: list[str] = []
     while window.tuner.active and time.time() < deadline:
         qapp.processEvents()
         if not window.banner_confirm.isHidden():
+            if not banner_texts:
+                banner_texts.append(window.banner_label.text())
             window.runner.confirm()
         time.sleep(0.01)
     assert not window.tuner.active
@@ -144,6 +157,7 @@ def test_autotune_mixed_plan_ui(qapp, tmp_path):
     ]
     assert plan_column == ["阶跃", "扰动"]
     assert window.ai_status.text().startswith("完成全部轮次")
+    assert banner_texts and "当前测试参数" in banner_texts[0]
     assert window.link.mode == MODE_IDLE
 
     window._disconnect()

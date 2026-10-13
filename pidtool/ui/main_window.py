@@ -90,6 +90,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._code_prompt = ""
         self._code_decided = False
         self._code_review_shown = False
+        self._ai_round_base = ""
         self._script_marks: list[tuple[float, str]] = []
         self._script_kind = ""
         self._prompt_text = ""
@@ -377,6 +378,9 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addLayout(left)
 
         right = QtWidgets.QVBoxLayout()
+        self.ai_current_label = QtWidgets.QLabel("—")
+        self.ai_current_label.setStyleSheet("font-weight: bold;")
+        right.addWidget(self.ai_current_label)
         self.ai_log = QtWidgets.QTableWidget(0, 9)
         self.ai_log.setHorizontalHeaderLabels(
             ["轮次", "方案", "Kp", "Ki", "Kd", "评分", "超调/偏差%", "调节/恢复(s)", "备注"]
@@ -958,6 +962,12 @@ class MainWindow(QtWidgets.QMainWindow):
             "kd": self.kd_spin.value(),
         }
 
+    def _banner_text(self, suffix: str = "") -> str:
+        text = f"{self._prompt_text}{suffix}"
+        if self.tuner.active and self._ai_round_base:
+            return f"当前测试参数：{self._ai_round_base}\n{text}"
+        return text
+
     def _on_experiment_event(self, kind: str, data: dict) -> None:
         if kind == "started":
             self._status(f"实验开始: {data.get('name', '')}")
@@ -966,13 +976,13 @@ class MainWindow(QtWidgets.QMainWindow):
         elif kind == "prompt":
             self._prompt_text = str(data.get("text", ""))
             self._prompt_manual = bool(data.get("manual", False))
-            self.banner_label.setText(self._prompt_text)
+            self.banner_label.setText(self._banner_text())
             self.banner_confirm.setVisible(self._prompt_manual)
             self.banner.show()
         elif kind == "prompt_tick":
             if not self._prompt_manual:
                 remaining = float(data.get("remaining", 0.0))
-                self.banner_label.setText(f"{self._prompt_text}（{remaining:.1f} s）")
+                self.banner_label.setText(self._banner_text(f"（{remaining:.1f} s）"))
         elif kind == "prompt_done":
             self.banner.hide()
             self.banner_confirm.hide()
@@ -1263,6 +1273,8 @@ class MainWindow(QtWidgets.QMainWindow):
         auto = self.app_config.data.get("autotune", {})
         plan = [str(kind) for kind in (auto.get("plan") or ["step"])]
         self.ai_log.setRowCount(0)
+        self._ai_round_base = ""
+        self.ai_current_label.setText("准备中…")
         self.sp_spin.setValue(self.ai_target_spin.value())
         self._set_ai_ui(True)
         try:
@@ -1299,13 +1311,26 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ai_status.setText(text)
             self._status(text)
         elif kind == "apply_gains":
-            self._set_gain_spins(
-                float(data.get("kp", 0.0)),
-                float(data.get("ki", 0.0)),
-                float(data.get("kd", 0.0)),
-            )
+            kp = float(data.get("kp", 0.0))
+            ki = float(data.get("ki", 0.0))
+            kd = float(data.get("kd", 0.0))
+            self._set_gain_spins(kp, ki, kd)
             self._apply_gains(silent=True)
+            round_no = int(data.get("round", 0))
+            total = int(data.get("total", 0))
+            if round_no and total and round_no <= total:
+                kind_label = "扰动" if data.get("kind") == "disturbance" else "阶跃"
+                self._ai_round_base = (
+                    f"第 {round_no}/{total} 轮 · {kind_label} · "
+                    f"Kp={kp:g} Ki={ki:g} Kd={kd:g}"
+                )
+                self.ai_current_label.setText(self._ai_round_base)
+            else:
+                self._ai_round_base = ""
+                self.ai_current_label.setText(f"恢复最优参数 Kp={kp:g} Ki={ki:g} Kd={kd:g}")
         elif kind == "run_experiment":
+            if self._ai_round_base:
+                self.ai_current_label.setText(f"{self._ai_round_base}（测试中）")
             experiment_kind = str(data.get("kind", "step"))
             if experiment_kind == "disturbance":
                 script = autotune_disturbance_script(
@@ -1326,6 +1351,8 @@ class MainWindow(QtWidgets.QMainWindow):
         elif kind == "pause_motor":
             if self.link is not None and self.link.is_open:
                 self._set_mode(MODE_IDLE, silent=True)
+            if self._ai_round_base:
+                self.ai_current_label.setText(f"{self._ai_round_base}（等待 AI 建议…）")
         elif kind == "iteration":
             self._append_ai_log_row(data)
         elif kind == "finished":
@@ -1338,6 +1365,12 @@ class MainWindow(QtWidgets.QMainWindow):
                     f"，最优评分 {score:.2f} "
                     f"(Kp={best['kp']:g} Ki={best['ki']:g} Kd={best['kd']:g})"
                 )
+                self.ai_current_label.setText(
+                    f"最优参数 Kp={best['kp']:g} Ki={best['ki']:g} Kd={best['kd']:g}"
+                    f"（评分 {score:.2f}）"
+                )
+            else:
+                self.ai_current_label.setText("—")
             self.ai_status.setText(text)
             self._status(text)
             self._refresh_trials_table()
