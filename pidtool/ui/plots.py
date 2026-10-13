@@ -59,6 +59,8 @@ class PlotPanel(QtWidgets.QWidget):
         self.window_spin.setSuffix(" s")
         self.freeze_check = QtWidgets.QCheckBox("冻结显示")
         self.clear_btn = QtWidgets.QPushButton("清除")
+        self.reset_btn = QtWidgets.QPushButton("复位视图")
+        self.reset_btn.clicked.connect(self.reset_view)
 
         self.curve_checks: dict[str, QtWidgets.QCheckBox] = {}
         bar = QtWidgets.QHBoxLayout()
@@ -66,6 +68,7 @@ class PlotPanel(QtWidgets.QWidget):
         bar.addWidget(self.window_spin)
         bar.addWidget(self.freeze_check)
         bar.addWidget(self.clear_btn)
+        bar.addWidget(self.reset_btn)
         bar.addWidget(QtWidgets.QLabel("| 显示"))
         for key, label in CURVE_LABELS:
             check = QtWidgets.QCheckBox(label)
@@ -79,8 +82,8 @@ class PlotPanel(QtWidgets.QWidget):
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.glw, 1)
         layout.addLayout(bar)
+        layout.addWidget(self.glw, 1)
 
         self._frozen_t: float | None = None
         self.markers: list[tuple[float, list[tuple[pg.PlotItem, pg.InfiniteLine]]]] = []
@@ -90,6 +93,14 @@ class PlotPanel(QtWidgets.QWidget):
             curve.setData([], [])
         self.clear_markers()
         self._frozen_t = None
+
+    def reset_view(self) -> None:
+        master = self.plot_track.getViewBox()
+        master.enableAutoRange(axis=None, enable=True)
+        master.updateAutoRange()
+        child = self.plot_terms.getViewBox()
+        child.enableAutoRange(axis=1, enable=True)
+        child.updateAutoRange()
 
     def add_marker(self, t: float, label: str) -> None:
         pen = pg.mkPen("#ffd166", width=1.2, style=QtCore.Qt.PenStyle.DashDotLine)

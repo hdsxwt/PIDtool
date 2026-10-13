@@ -70,6 +70,30 @@ def test_markers_attach_to_two_plots_and_clear(qapp):
     assert panel.markers == []
 
 
+def test_control_bar_is_above_plots(qapp):
+    panel = PlotPanel()
+    layout = panel.layout()
+    assert layout.count() == 2
+    assert layout.itemAt(0).layout() is not None
+    assert layout.itemAt(1).widget() is panel.glw
+
+
+def test_reset_view_restores_autorange(qapp):
+    panel = PlotPanel()
+    data = _data()
+    panel.update_data(data, float(data["t"][-1]))
+    panel.plot_track.setXRange(0.0, 1.0)
+    panel.plot_track.setYRange(0.0, 0.001)
+    assert not panel.plot_track.vb.autoRangeEnabled()[0]
+    assert not panel.plot_track.vb.autoRangeEnabled()[1]
+
+    panel.reset_view()
+
+    assert panel.plot_track.vb.autoRangeEnabled()[0]
+    assert panel.plot_track.vb.autoRangeEnabled()[1]
+    assert panel.plot_terms.vb.autoRangeEnabled()[1]
+
+
 def test_update_data_empty_returns(qapp):
     panel = PlotPanel()
     panel.update_data({"t": np.array([])}, 0.0)
