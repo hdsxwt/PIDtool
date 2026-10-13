@@ -79,6 +79,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.link: LinkBase | None = None
         self.safety = copy.deepcopy(DEFAULT_SETTINGS["safety"])
         self._capture_t0: float | None = None
+        self._capture_t1: float | None = None
         self._capture_sp = 1.0
         self._capturing = False
         self._last_plot_t: float | None = None
@@ -726,6 +727,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_state.setText("未连接")
         self.lbl_rate.setText("采样率: -")
         self._capture_t0 = None
+        self._capture_t1 = None
         self._capturing = False
         self._last_plot_t = None
         self.capture_btn.setText("开始采集")
@@ -838,6 +840,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self._start_capture()
 
     def _stop_capture(self) -> None:
+        if self._capturing:
+            latest = self._latest_t()
+            if latest is not None:
+                self._capture_t1 = latest
         self._capturing = False
         self.capture_btn.setText("开始采集")
 
@@ -849,6 +855,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._status("暂无数据，请确认遥测已开启")
             return
         self._capture_t0 = max(t_min, t_max - lookback)
+        self._capture_t1 = None
         self._capture_sp = self.sp_spin.value()
         self._capturing = True
         self.capture_btn.setText("结束采集")
@@ -870,7 +877,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if t.size < 50:
             self._status("数据不足，无法计算指标")
             return
-        mask = t >= self._capture_t0 - 0.05
+        t_end = self._capture_t1 if self._capture_t1 is not None else float(t[-1])
+        mask = (t >= self._capture_t0 - 0.05) & (t <= t_end + 1e-6)
         tt = t[mask]
         if tt.size < 50:
             self._status("采集窗口内数据不足，无法计算指标")
@@ -881,7 +889,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._status("采集窗口无效（目标值与初始值过近）")
             return
         self._set_metrics_rows(self._step_metric_rows(metrics))
-        self._status("指标计算完成")
+        window_s = float(t_end - self._capture_t0)
+        self._status(f"指标计算完成（采集窗口 {window_s:.2f} s）")
         self._last_metrics = self._step_metrics_dict(metrics)
         if self.workspace is not None:
             self.workspace.append_trial(
@@ -890,7 +899,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     "setpoint": float(self._capture_sp),
                     "gains": self._gains_dict(),
                     "metrics": self._last_metrics,
-                    "capture_s": float(t[-1] - self._capture_t0),
+                    "capture_s": window_s,
                 }
             )
             self._refresh_trials_table()
@@ -1014,7 +1023,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if t.size < 50:
             self._status("数据不足，无法计算实验指标")
             return
-        mask = t >= self._capture_t0 - 0.05
+        t_end = self._capture_t1 if self._capture_t1 is not None else float(t[-1])
+        mask = (t >= self._capture_t0 - 0.05) & (t <= t_end + 1e-6)
         tt = t[mask]
         yy = data["feedback"][mask].astype(float)
         if tt.size < 50:

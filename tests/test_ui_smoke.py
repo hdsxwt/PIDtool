@@ -66,3 +66,48 @@ def test_mock_link_smoke(qapp, tmp_path):
     window._disconnect()
     assert window.link is None
     window.close()
+
+
+def test_capture_window_frozen_after_stop(qapp, tmp_path):
+    config = AppConfig(path=tmp_path / "app.toml")
+    window = MainWindow(app_config=config)
+    window._activate_workspace(tmp_path)
+    window.link_combo.setCurrentIndex(window.link_combo.findData("mock"))
+    window._connect()
+    assert _wait_for(qapp, lambda: window.link.buffer.total >= 60, timeout=5.0)
+
+    window.sp_spin.setValue(2.0)
+    window._apply_setpoint()
+    assert window._capturing
+
+    baseline = window.link.buffer.total
+    assert _wait_for(
+        qapp,
+        lambda: window.link is not None and window.link.buffer.total - baseline >= 150,
+        timeout=5.0,
+    )
+    window._on_capture_clicked()
+    assert not window._capturing
+    t1 = window._capture_t1
+    assert t1 is not None
+    expected_window = t1 - window._capture_t0
+
+    window.sp_spin.setValue(1.0)
+    window._apply_setpoint(silent=True)
+    baseline = window.link.buffer.total
+    assert _wait_for(
+        qapp,
+        lambda: window.link is not None and window.link.buffer.total - baseline >= 200,
+        timeout=5.0,
+    )
+
+    window._compute_metrics()
+    trials = window.workspace.read_trials()
+    trial = trials[-1]
+    assert trial["kind"] == "manual_step"
+    assert abs(trial["capture_s"] - expected_window) < 0.05
+    assert trial["capture_s"] < (window.link.buffer.span()[1] - window._capture_t0) - 0.5
+
+    window._disconnect()
+    assert window._capture_t1 is None
+    window.close()
