@@ -928,6 +928,8 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         t_min, t_max = self.link.buffer.span()
         if t_max <= 0.0:
+            self._capture_t0 = None
+            self._capture_t1 = None
             self._status("暂无数据，请确认遥测已开启")
             return
         self._capture_t0 = max(t_min, t_max - lookback)
@@ -1097,9 +1099,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _finish_collect(self, kind: str) -> None:
         self._stop_capture()
-        if self.link is None or self._capture_t0 is None:
-            self._status("采集数据缺失，无法计算实验指标")
-            return
 
         def fail(message: str) -> None:
             self._status(message)
@@ -1107,6 +1106,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.tuner.on_trial(
                     None, self._gains_dict(), float(self._capture_sp), kind=kind
                 )
+
+        if self.link is None or self._capture_t0 is None:
+            fail("采集数据缺失，无法计算实验指标")
+            return
 
         data = self._capture_snapshot()
         t = data["t"]
@@ -1483,7 +1486,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _append_ai_log_rows(self, entry: dict) -> None:
         actions = entry.get("actions") or []
-        total = max(1, len(actions))
+        total = max(1, int(entry.get("action_total") or len(actions)))
         for index, action in enumerate(actions, 1):
             row = self.ai_log.rowCount()
             self.ai_log.insertRow(row)
@@ -1497,6 +1500,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 main_metric = _fmt_num(action.get("overshoot_pct"), ".2f")
                 timing = _fmt_num(action.get("settling_time"), ".3f")
             note = f"目标 {_fmt_num(action.get('setpoint'), '.4g')}"
+            if action.get("invalid"):
+                note += " · 数据无效（已跳过本轮剩余动作）"
             if index == total:
                 note += f" · 轮评分 {_fmt_num(entry.get('score'), '.2f')}"
                 if entry.get("best"):

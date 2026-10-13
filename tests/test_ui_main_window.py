@@ -601,6 +601,25 @@ def test_finish_collect_ringing_baseline_yields_metrics(window):
     assert "实验指标已计算" in window.statusBar().currentMessage()
 
 
+def test_finish_collect_missing_data_notifies_tuner(window):
+    captured: dict = {}
+
+    def spy(metrics, gains, setpoint, kind="step", waveform=None):
+        captured["metrics"] = metrics
+        captured["kind"] = kind
+
+    window.tuner._active = True
+    window.tuner.on_trial = spy
+    try:
+        window._finish_collect("step")
+    finally:
+        window.tuner._active = False
+
+    assert captured.get("metrics") is None
+    assert captured.get("kind") == "step"
+    assert "采集数据缺失" in window.statusBar().currentMessage()
+
+
 def test_finish_collect_disturbance_with_waveform(window, tmp_path):
     def value(t: float) -> float:
         return 0.6 if 2.0 <= t < 2.5 else 1.0

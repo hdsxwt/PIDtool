@@ -18,8 +18,9 @@ terminal fiddling into a semi/fully automated workflow.
   human-in-the-loop prompts (countdown banner, "apply/stop resistance" confirm)
   and event markers on the plots
 - **AI closed-loop auto-tuning**: DeepSeek proposes new gains from the trial
-  history; the tool runs experiments, scores them, keeps the best, stops early
-  on oscillation/degradation and restores the best gains at the end
+  history; the tool runs experiments, scores them, keeps the best and restores
+  the best gains at the end; oscillation or invalid data never aborts a session
+  (the round is skipped and the AI keeps adjusting in later rounds)
 - **Param export**: `config.json` plus a paste-ready `pid_config.h`
 - **Authorized code editing**: for structural changes, opencode edits code in a
   limited scope; a forced git diff review with keep/rollback
@@ -87,8 +88,9 @@ applied. The "调参方案…" dialog lets you add/remove/reorder rounds and act
 edit each action's parameters. Disturbance actions ask you to apply/stop
 resistance via the banner; the motor is stopped while waiting for the AI and when
 tuning ends. Safety: workspace limits, per-round recording, **restore of the
-best gains at the end**, early stop on oscillation or repeated degradation,
-abort anytime. The API key is stored only in the global config
+best gains at the end**, no early stop on oscillation or invalid data (the AI
+keeps analyzing and tuning in later rounds), abort anytime. The API key is
+stored only in the global config
 (`%APPDATA%/PIDtool/app.toml`).
 
 Optional data: tick "send downsampled raw waveform to AI" to attach ~80

@@ -35,8 +35,6 @@ class AutoTuner:
         self._pending_experiment = False
         self._history: list[dict] = []
         self._best: dict | None = None
-        self._worse_streak = 0
-        self._osc_streak = 0
         self._current = {"kp": 0.0, "ki": 0.0, "kd": 0.0}
 
     @property
@@ -71,8 +69,6 @@ class AutoTuner:
         self._action_index = 0
         self._round_buffer = []
         self._pending_experiment = False
-        self._worse_streak = 0
-        self._osc_streak = 0
         self._result = None
         self._current = {"kp": float(kp), "ki": float(ki), "kd": float(kd)}
         self._on_event(
@@ -107,42 +103,55 @@ class AutoTuner:
         target = float(action.get("target_sp", setpoint))
         score = score_metrics(kind, metrics, target)
         entry: dict = {"kind": kind, "setpoint": target, "score": score}
-        if metrics is not None:
-            if kind == "disturbance":
-                entry.update(
-                    {
-                        "max_deviation": metrics.max_deviation,
-                        "max_deviation_time": metrics.max_deviation_time,
-                        "recovery_time": metrics.recovery_time,
-                        "residual_error": metrics.residual_error,
-                        "tail_ripple": metrics.tail_ripple,
-                        "oscillating": metrics.oscillating,
-                    }
-                )
-            else:
-                entry.update(
-                    {
-                        "overshoot_pct": metrics.overshoot_pct,
-                        "rise_time": metrics.rise_time,
-                        "settling_time": metrics.settling_time,
-                        "steady_error": metrics.steady_error,
-                        "tail_ripple": metrics.tail_ripple,
-                        "oscillating": metrics.oscillating,
-                    }
-                )
+        if metrics is None:
+            entry["invalid"] = True
+        elif kind == "disturbance":
+            entry.update(
+                {
+                    "max_deviation": metrics.max_deviation,
+                    "max_deviation_time": metrics.max_deviation_time,
+                    "recovery_time": metrics.recovery_time,
+                    "residual_error": metrics.residual_error,
+                    "tail_ripple": metrics.tail_ripple,
+                    "oscillating": metrics.oscillating,
+                }
+            )
+        else:
+            entry.update(
+                {
+                    "overshoot_pct": metrics.overshoot_pct,
+                    "rise_time": metrics.rise_time,
+                    "settling_time": metrics.settling_time,
+                    "steady_error": metrics.steady_error,
+                    "tail_ripple": metrics.tail_ripple,
+                    "oscillating": metrics.oscillating,
+                }
+            )
         if waveform:
             entry["waveform"] = waveform
         self._round_buffer.append(entry)
-        if score == float("inf"):
-            self._graceful_finish("实验数据无效，停止调参")
-            return
 
         actions = self._current_actions()
+        if metrics is None:
+            self._on_event(
+                "status",
+                {
+                    "text": (
+                        f"动作 {self._action_index + 1}/{max(1, len(actions))} 数据无效："
+                        "跳过本轮剩余动作，继续请求 AI 建议"
+                    )
+                },
+            )
+            self._finish_round(gains)
+            return
         if self._action_index + 1 < len(actions):
             self._action_index += 1
             self._pending_experiment = True
             return
+        self._finish_round(gains)
 
+    def _finish_round(self, gains: dict) -> None:
+        planned_total = max(1, len(self._current_actions()))
         completed_meta = self._round_meta()
         self._round_index += 1
         self._pending_experiment = False
@@ -154,6 +163,7 @@ class AutoTuner:
             "round": completed_meta["round"],
             "round_global": completed_meta["round_global"],
             "round_total": self._total,
+            "action_total": planned_total,
             "score": round_score,
             "kp": float(gains["kp"]),
             "ki": float(gains["ki"]),
@@ -174,19 +184,16 @@ class AutoTuner:
         self._on_event("iteration", round_entry)
 
         oscillating = any(bool(item.get("oscillating")) for item in self._round_buffer)
-        self._worse_streak = 0 if improved else self._worse_streak + 1
-        self._osc_streak = self._osc_streak + 1 if oscillating else 0
+        if oscillating:
+            self._on_event(
+                "status",
+                {"text": "本轮检测到振荡：已记录，继续交由 AI 调整"},
+            )
         self._round_buffer = []
         self._action_index = 0
 
-        if self._osc_streak >= 2:
-            self._graceful_finish("系统连续振荡，提前停止")
-            return
         if self._round_index >= self._total:
             self._graceful_finish("完成全部轮次")
-            return
-        if self._worse_streak >= 3:
-            self._graceful_finish("连续 3 轮退化，提前停止")
             return
         self._on_event("pause_motor", {})
         self._on_event("status", {"text": "正在请求 AI 建议…（电机已停止）"})

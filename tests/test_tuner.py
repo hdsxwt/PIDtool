@@ -197,19 +197,25 @@ def test_suggestion_clamped_to_limits():
     assert applies[-1]["kd"] == 10.0
 
 
-def test_oscillation_stops_after_two_rounds():
+def test_oscillation_does_not_stop_tuning():
     events: list[tuple[str, dict]] = []
-    tuner = start_tuner(events, rounds=[step_round()] * 4, cycles=1)
+    tuner = start_tuner(events, rounds=[step_round()] * 3, cycles=1)
     tuner.on_trial(make_metrics(osc=True), {"kp": 4.0, "ki": 60.0, "kd": 0.05}, 2.0)
     tuner.tick()
     tuner.on_trial(make_metrics(osc=True), {"kp": 5.0, "ki": 40.0, "kd": 0.1}, 2.0)
+    assert tuner.active
+    tuner.tick()
+    tuner.on_trial(make_metrics(osc=True), {"kp": 6.0, "ki": 30.0, "kd": 0.2}, 2.0)
     assert not tuner.active
-    assert "振荡" in events[-1][1]["reason"]
+    assert events[-1][1]["reason"] == "完成全部轮次"
+    assert any(
+        "振荡" in data.get("text", "") for kind, data in events if kind == "status"
+    )
 
 
-def test_three_worse_rounds_stop_early():
+def test_worsening_rounds_continue_to_total():
     events: list[tuple[str, dict]] = []
-    tuner = start_tuner(events, rounds=[step_round()] * 6, cycles=1)
+    tuner = start_tuner(events, rounds=[step_round()] * 4, cycles=1)
     tuner.on_trial(make_metrics(overshoot=2.0), {"kp": 4.0, "ki": 60.0, "kd": 0.05}, 2.0)
     for index in range(3):
         tuner.tick()
@@ -217,18 +223,41 @@ def test_three_worse_rounds_stop_early():
             make_metrics(overshoot=10.0 + index), {"kp": 5.0, "ki": 40.0, "kd": 0.1}, 2.0
         )
     assert not tuner.active
-    assert "退化" in events[-1][1]["reason"]
+    assert events[-1][1]["reason"] == "完成全部轮次"
+    assert events[-1][1]["best_gains"] == {"kp": 4.0, "ki": 60.0, "kd": 0.05}
 
 
-def test_invalid_action_stops_immediately():
+def test_invalid_action_continues_after_round():
     events: list[tuple[str, dict]] = []
-    tuner = start_tuner(events, rounds=[mixed_round()], cycles=2)
+    captured: list[list[dict]] = []
+    tuner = start_tuner(
+        events,
+        rounds=[mixed_round()],
+        cycles=2,
+        suggest=lambda h, l: (captured.append(h), Suggestion(5.0, 40.0, 0.1, ""))[1],
+    )
     tuner.on_trial(None, {"kp": 4.0, "ki": 60.0, "kd": 0.05}, 2.0)
-    assert not tuner.active
-    assert "数据无效" in events[-1][1]["reason"]
-    assert "iteration" not in kinds(events)
+    assert tuner.active
     runs = [d for k, d in events if k == "run_experiment"]
     assert len(runs) == 1
+    iterations = [d for k, d in events if k == "iteration"]
+    assert len(iterations) == 1
+    assert iterations[0]["score"] == float("inf")
+    assert iterations[0]["action_total"] == 2
+    assert iterations[0]["actions"][0]["invalid"] is True
+    assert "pause_motor" in kinds(events)
+    assert any(
+        "数据无效" in data.get("text", "") for kind, data in events if kind == "status"
+    )
+
+    tuner.tick()
+    assert len(captured) == 1
+    assert captured[0][0]["actions"][0]["invalid"] is True
+    runs = [d for k, d in events if k == "run_experiment"]
+    assert len(runs) == 2
+    assert runs[1]["round_global"] == 2
+    assert runs[1]["action_index"] == 1
+    tuner.abort()
 
 
 def test_abort_finishes():

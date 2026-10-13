@@ -9,6 +9,8 @@ SYSTEM_PROMPT = (
     "你的任务是根据历史轮次提出下一组参数：在保证稳定（无持续振荡）的前提下，"
     "减小超调、缩短上升/调节/恢复时间、消除稳态误差与残余偏差。"
     "若某轮之后评分变差，应避免沿该方向继续变化。"
+    "若某动作显示“数据无效（无法评估）”（实验未能产生有效指标，"
+    "常见于剧烈振荡或数据异常），应改为向更保守的参数方向调整，避免再次失败。"
     "只输出 JSON，格式为 "
     '{"kp": 数字, "ki": 数字, "kd": 数字, "reasoning": "一句话理由"}，'
     "不要输出其他内容。"
@@ -40,18 +42,28 @@ def build_user_prompt(history: list[dict], limits: dict) -> str:
     ]
     for entry in history:
         marker = "（当前最优）" if entry.get("best") else ""
+        score_text = _fmt(entry.get("score"), ".2f")
+        if entry.get("score") == float("inf"):
+            score_text = "—（含无效动作）"
         lines.append(
             f"第{entry.get('iteration', '?')}轮"
             f"（循环{entry.get('cycle', '?')} 第{entry.get('round_global', '?')}轮）: "
             f"Kp={_fmt(entry.get('kp'), '.4g')} Ki={_fmt(entry.get('ki'), '.4g')} "
             f"Kd={_fmt(entry.get('kd'), '.4g')} | "
-            f"轮评分={_fmt(entry.get('score'), '.2f')}{marker}"
+            f"轮评分={score_text}{marker}"
         )
         for index, action in enumerate(entry.get("actions", []), 1):
             if not isinstance(action, dict):
                 continue
             kind = str(action.get("kind", "step"))
+            kind_label = "扰动" if kind == "disturbance" else "阶跃"
             target = _fmt(action.get("setpoint"), '.4g')
+            if action.get("invalid"):
+                lines.append(
+                    f"  动作{index}（{kind_label} 目标={target}）: "
+                    "数据无效（无法评估，请排查并按更保守方向调整）"
+                )
+                continue
             if kind == "disturbance":
                 lines.append(
                     f"  动作{index}（扰动 目标={target}）: "

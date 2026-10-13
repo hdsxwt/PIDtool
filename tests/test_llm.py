@@ -200,6 +200,28 @@ def test_build_user_prompt_tolerates_missing_and_invalid_fields():
     assert "降采样波形" in text
 
 
+def test_build_user_prompt_reports_invalid_action_and_round():
+    history = [
+        {
+            "iteration": 1,
+            "cycle": 1,
+            "round_global": 1,
+            "kp": 4.0,
+            "ki": 60.0,
+            "kd": 0.05,
+            "score": float("inf"),
+            "actions": [
+                {"kind": "step", "setpoint": 600.0, "score": float("inf"), "invalid": True},
+                {"kind": "step", "setpoint": 1200.0},
+            ],
+        }
+    ]
+    text = build_user_prompt(history, _limits())
+    assert "轮评分=—（含无效动作）" in text
+    assert "动作1（阶跃 目标=600）: 数据无效" in text
+    assert "动作2（阶跃 目标=1200）" in text
+
+
 def test_build_user_prompt_empty_limits():
     text = build_user_prompt([], {})
     assert "Kp∈[None, None]" in text
