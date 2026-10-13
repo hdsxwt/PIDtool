@@ -11,10 +11,14 @@ def _creation_flags() -> int:
     return getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+def _git_executable() -> str:
+    return shutil.which("git") or "git"
+
+
 def run_git(args: list[str], cwd: Path, timeout: float = GIT_TIMEOUT) -> tuple[int, str]:
     try:
         proc = subprocess.run(
-            ["git", *args],
+            [_git_executable(), *args],
             cwd=str(cwd),
             capture_output=True,
             text=True,

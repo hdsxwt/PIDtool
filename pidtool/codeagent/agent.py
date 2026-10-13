@@ -62,8 +62,10 @@ class OpencodeAgent:
 
     def resolve_executable(self) -> list[str]:
         resolved = shutil.which(self.executable) or self.executable
-        if not Path(resolved).exists():
+        resolved_path = Path(resolved).resolve()
+        if not resolved_path.exists():
             raise CodeAgentError(f"未找到 opencode 可执行文件: {self.executable}")
+        resolved = str(resolved_path)
         if resolved.lower().endswith((".bat", ".cmd")):
             self._check_batch_forwards_args(Path(resolved))
             return [os.environ.get("COMSPEC", "cmd.exe"), "/c", resolved]
@@ -121,7 +123,8 @@ class OpencodeAgent:
 
         def reader() -> None:
             try:
-                assert proc.stdout is not None
+                if proc.stdout is None:
+                    return
                 for raw in proc.stdout:
                     lines.put(raw.rstrip("\r\n"))
             finally:

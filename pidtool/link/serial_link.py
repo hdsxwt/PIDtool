@@ -94,7 +94,8 @@ class SerialLink(LinkBase):
 
     def _run(self) -> None:
         ser = self._ser
-        assert ser is not None
+        if ser is None:
+            return
         while self._open:
             try:
                 waiting = ser.in_waiting
@@ -121,6 +122,7 @@ class SerialLink(LinkBase):
         if self._ser is not None:
             try:
                 self._ser.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                self.stats.errors += 1
+                self.stats.last_error = str(exc)
             self._ser = None

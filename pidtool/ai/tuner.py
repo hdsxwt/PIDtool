@@ -199,7 +199,9 @@ class AutoTuner:
         }
 
     def _request(self) -> None:
-        assert self._suggest is not None
+        if self._suggest is None:
+            self._graceful_finish("AI 建议器未配置，停止调参")
+            return
 
         def task() -> None:
             try:

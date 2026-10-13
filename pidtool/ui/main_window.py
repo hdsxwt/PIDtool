@@ -780,8 +780,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.link is not None:
             try:
                 self.link.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                self.link.stats.errors += 1
+                self.link.stats.last_error = str(exc)
             self.link = None
         self.connect_btn.setText("连接")
         self._set_connected_ui(False)
@@ -800,7 +801,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _apply_gains(self, checked: bool = False, silent: bool = False) -> None:
         if not self._ensure_link(silent=silent):
             return
-        assert self.link is not None
+        if self.link is None:
+            return
         kp, ki, kd = self.kp_spin.value(), self.ki_spin.value(), self.kd_spin.value()
         kp2, ki2, kd2 = self._clamp_gains(kp, ki, kd)
         if (kp2, ki2, kd2) != (kp, ki, kd):
@@ -819,7 +821,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _read_gains(self, checked: bool = False) -> None:
         if not self._ensure_link():
             return
-        assert self.link is not None
+        if self.link is None:
+            return
         try:
             self.link.send(self.link.adapter.encode_get_gains())
         except Exception as exc:
@@ -828,7 +831,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _apply_setpoint(self, checked: bool = False, silent: bool = False) -> None:
         if not self._ensure_link(silent=silent):
             return
-        assert self.link is not None
+        if self.link is None:
+            return
         value = self.sp_spin.value()
         try:
             self.link.send(self.link.adapter.encode_set_setpoint(value))
@@ -846,7 +850,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _set_mode(self, mode: int, silent: bool = False) -> None:
         if not self._ensure_link(silent=silent):
             return
-        assert self.link is not None
+        if self.link is None:
+            return
         try:
             self.link.send(self.link.adapter.encode_set_mode(mode))
         except Exception as exc:
@@ -858,7 +863,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _start_telemetry(self, checked: bool = False) -> None:
         if not self._ensure_link():
             return
-        assert self.link is not None
+        if self.link is None:
+            return
         period = 5
         if self.workspace is not None:
             period = int(self.workspace.load_settings()["telemetry"].get("period_ms", 5))
@@ -872,7 +878,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _stop_telemetry(self, checked: bool = False) -> None:
         if not self._ensure_link():
             return
-        assert self.link is not None
+        if self.link is None:
+            return
         try:
             self.link.send(self.link.adapter.encode_stop_telemetry())
         except Exception as exc:

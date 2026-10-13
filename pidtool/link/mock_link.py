@@ -67,7 +67,7 @@ class MockLink(LinkBase):
         self._start = 0.0
         self._thread: threading.Thread | None = None
         self._cmd_decoder = FrameDecoder()
-        self._rng = random.Random(1234)
+        self._rng = random.Random(1234)  # nosec B311 - simulated sensor noise only
 
     def open(self) -> None:
         self._start = time.perf_counter()
