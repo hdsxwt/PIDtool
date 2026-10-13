@@ -68,3 +68,32 @@ def test_markers_attach_to_two_plots_and_clear(qapp):
     assert len(items) == 2
     panel.clear()
     assert panel.markers == []
+
+
+def test_update_data_empty_returns(qapp):
+    panel = PlotPanel()
+    panel.update_data({"t": np.array([])}, 0.0)
+    xs, _ = panel.curves["feedback"].getData()
+    assert xs is None or xs.size == 0
+
+
+def test_freeze_keeps_time_reference(qapp):
+    panel = PlotPanel()
+    data = _data()
+    panel.freeze_check.setChecked(True)
+    panel.update_data(data, 101.0)
+    frozen = panel._frozen_t
+    assert frozen is not None
+    panel.update_data(data, 999.0)
+    assert panel._frozen_t == frozen
+    panel.freeze_check.setChecked(False)
+    panel.update_data(data, 999.0)
+    assert panel._frozen_t is None
+
+
+def test_markers_follow_time_reference(qapp):
+    panel = PlotPanel()
+    panel.add_marker(100.5, "标记")
+    panel.update_data(_data(), 101.0)
+    _, items = panel.markers[0]
+    assert abs(items[0][1].value() - (100.5 - 101.0)) < 1e-9

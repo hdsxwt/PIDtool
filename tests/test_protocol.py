@@ -3,6 +3,8 @@ from __future__ import annotations
 import random
 import struct
 
+import pytest
+
 from pidtool.link.protocol import (
     ACK_OK,
     ACK_STRUCT,
@@ -12,12 +14,17 @@ from pidtool.link.protocol import (
     CMD_SET_SETPOINT,
     CMD_START_TELEMETRY,
     CMD_STOP_TELEMETRY,
+    GAINS_STRUCT,
+    MAX_BODY,
     MODE_RUN,
     MSG_ACK,
+    MSG_GAINS,
     MSG_TELEMETRY,
+    MSG_TEXT,
     TELEMETRY_STRUCT,
     DefaultProtocolAdapter,
     FrameDecoder,
+    ProtocolAdapter,
     crc16_ccitt,
     encode_frame,
     load_adapter,
@@ -139,3 +146,120 @@ def test_load_custom_adapter(tmp_path):
     )
     adapter = load_adapter(f"{module_path}:Adapter")
     assert adapter.name == "custom"
+
+
+def test_encode_frame_body_too_large():
+    with pytest.raises(ValueError):
+        encode_frame(MSG_TELEMETRY, b"\x00" * MAX_BODY)
+    assert encode_frame(MSG_TELEMETRY, b"\x00" * (MAX_BODY - 1))
+
+
+def test_decoder_keeps_partial_sof_and_resyncs():
+    decoder = FrameDecoder()
+    frame = encode_frame(MSG_TELEMETRY, TELEMETRY_STRUCT.pack(7, 1, 0, 0, 0, 0, 0))
+    assert decoder.feed(b"\xaa\x55") == []
+    out = decoder.feed(frame[2:])
+    assert len(out) == 1
+    assert out[0][0] == MSG_TELEMETRY
+
+
+def test_decoder_keeps_trailing_sof_byte():
+    decoder = FrameDecoder()
+    frame = encode_frame(MSG_TELEMETRY, TELEMETRY_STRUCT.pack(7, 1, 0, 0, 0, 0, 0))
+    assert decoder.feed(b"\x00\xaa") == []
+    assert decoder.garbage_bytes >= 1
+    out = decoder.feed(b"\x55" + frame[2:])
+    assert len(out) == 1
+
+
+def test_decoder_drops_bad_length_without_consuming_valid_frame():
+    decoder = FrameDecoder()
+    frame = encode_frame(MSG_TELEMETRY, TELEMETRY_STRUCT.pack(1, 0, 0, 0, 0, 0, 0))
+    stream = b"\xaa\x55\x00" + b"\xaa\x55\xff" + frame
+    out = decoder.feed(stream)
+    assert len(out) == 1
+    assert decoder.garbage_bytes >= 2
+
+
+def test_decoder_empty_feed():
+    decoder = FrameDecoder()
+    assert decoder.feed(b"") == []
+    assert decoder.frames == 0
+
+
+def test_gains_event():
+    adapter = DefaultProtocolAdapter()
+    _, events = adapter.feed(encode_frame(MSG_GAINS, GAINS_STRUCT.pack(1.5, 2.5, 0.25)))
+    assert len(events) == 1
+    assert events[0].kind == "gains"
+    assert events[0].data == {"kp": 1.5, "ki": 2.5, "kd": 0.25}
+
+
+def test_text_event_and_replacement():
+    adapter = DefaultProtocolAdapter()
+    _, events = adapter.feed(encode_frame(MSG_TEXT, b"hello"))
+    assert events[0].kind == "text"
+    assert events[0].data["text"] == "hello"
+
+    _, events = adapter.feed(encode_frame(MSG_TEXT, b"\xff\xfe"))
+    assert events[0].data["text"] == "\ufffd\ufffd"
+
+
+def test_bad_payload_sizes_are_ignored():
+    adapter = DefaultProtocolAdapter()
+    samples, events = adapter.feed(encode_frame(MSG_TELEMETRY, b"\x01\x02"))
+    assert samples == [] and events == []
+    samples, events = adapter.feed(encode_frame(MSG_GAINS, b"\x01"))
+    assert samples == [] and events == []
+    samples, events = adapter.feed(encode_frame(MSG_ACK, b"\x01"))
+    assert samples == [] and events == []
+
+
+def test_unknown_message_type_ignored():
+    adapter = DefaultProtocolAdapter()
+    samples, events = adapter.feed(encode_frame(0x55, b"payload"))
+    assert samples == [] and events == []
+
+
+def test_base_adapter_is_abstract():
+    adapter = ProtocolAdapter()
+    with pytest.raises(NotImplementedError):
+        adapter.encode_set_gains(1, 1, 1)
+    with pytest.raises(NotImplementedError):
+        adapter.encode_set_setpoint(1)
+    with pytest.raises(NotImplementedError):
+        adapter.encode_set_mode(1)
+    with pytest.raises(NotImplementedError):
+        adapter.encode_start_telemetry()
+    with pytest.raises(NotImplementedError):
+        adapter.encode_stop_telemetry()
+    with pytest.raises(NotImplementedError):
+        adapter.encode_get_gains()
+    with pytest.raises(NotImplementedError):
+        adapter.feed(b"")
+
+
+def test_load_adapter_missing_file():
+    with pytest.raises(FileNotFoundError):
+        load_adapter("no_such_adapter_file.py")
+    with pytest.raises(FileNotFoundError):
+        load_adapter("no_such_adapter_file.py:Adapter")
+
+
+def test_load_adapter_missing_class(tmp_path):
+    module_path = tmp_path / "no_class_adapter.py"
+    module_path.write_text("x = 1\n", encoding="utf-8")
+    with pytest.raises(AttributeError):
+        load_adapter(f"{module_path}:Missing")
+
+
+def test_load_adapter_unsupported_module(tmp_path):
+    path = tmp_path / "adapter.txt"
+    path.write_text("x = 1\n", encoding="utf-8")
+    with pytest.raises(ImportError):
+        load_adapter(str(path))
+
+
+def test_load_adapter_defaults_to_default_when_blank():
+    assert isinstance(load_adapter(""), DefaultProtocolAdapter)
+    assert isinstance(load_adapter("  default  "), DefaultProtocolAdapter)

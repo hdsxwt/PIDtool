@@ -150,3 +150,45 @@ def test_disturbance_oscillation_flagged():
     assert m is not None
     assert m.oscillating
     assert abs(m.tail_ripple - 0.2) < 0.03
+
+
+def test_step_too_few_samples_returns_none():
+    t = np.arange(0.0, 0.009, 0.001)
+    y = np.zeros_like(t)
+    assert analyze_step(t, y, 1.0) is None
+
+
+def test_step_mismatched_lengths_uses_shortest():
+    t = np.arange(0.0, 2.0, 0.001)
+    y = np.zeros(500)
+    y[100:] = 1.0 - np.exp(-np.arange(400, dtype=float) / 50.0)
+    m = analyze_step(t, y, 1.0)
+    assert m is not None
+    assert m.samples == 500
+
+
+def test_step_nan_head_does_not_crash():
+    t = np.arange(0.0, 2.0, 0.001)
+    y = np.ones_like(t)
+    y[0] = float("nan")
+    m = analyze_step(t, y, 1.0)
+    assert m is not None
+    assert m.settling_time == 0.0
+
+
+def test_disturbance_too_few_samples_returns_none():
+    t = np.arange(0.0, 0.009, 0.001)
+    y = np.ones_like(t)
+    assert analyze_disturbance(t, y, 1.0, 0.002, 0.004, 0.02) is None
+
+
+def test_disturbance_window_outside_data_returns_none():
+    t = np.arange(0.0, 4.0, 0.001)
+    y = np.ones_like(t)
+    assert analyze_disturbance(t, y, 1.0, 10.0, 11.0, 0.02) is None
+
+
+def test_rmse_array_reference():
+    y = np.array([1.0, 2.0, 3.0])
+    ref = np.array([1.0, 2.0, 4.0])
+    assert abs(rmse(y, ref) - 1.0 / np.sqrt(3.0)) < 1e-12

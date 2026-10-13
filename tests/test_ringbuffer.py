@@ -64,3 +64,53 @@ def test_tail_span_values_are_copies():
     data["t"][0] = 123.0
     fresh = buffer.tail_span(100.0)
     assert fresh["t"][0] == 0.0
+
+
+def test_empty_buffer_shapes_and_clear():
+    buffer = SampleBuffer(capacity=8)
+    assert buffer.total == 0
+    assert buffer.span() == (0.0, 0.0)
+    empty = buffer.tail(5)
+    assert empty["t"].size == 0
+    assert empty["tick_us"].size == 0
+    for name in ("setpoint", "feedback", "u", "up", "ui", "ud"):
+        assert empty[name].size == 0
+
+    buffer.append([])
+    assert buffer.total == 0
+
+    _fill(buffer, 3)
+    assert buffer.total == 3
+    buffer.clear()
+    assert buffer.total == 0
+    assert buffer.span() == (0.0, 0.0)
+
+
+def test_tail_zero_and_negative_counts():
+    buffer = SampleBuffer(capacity=8)
+    _fill(buffer, 3)
+    assert buffer.tail(0)["t"].size == 0
+    assert buffer.tail(-4)["t"].size == 0
+
+
+def test_tail_returns_fields_in_order():
+    buffer = SampleBuffer(capacity=8)
+    buffer.append([Sample(1.0, 1000000, 1.5, 1.4, 2.0, 1.0, 0.5, 0.25)])
+    data = buffer.tail(1)
+    assert data["t"][0] == 1.0
+    assert data["tick_us"][0] == 1000000
+    assert data["setpoint"][0] == 1.5
+    assert data["feedback"][0] == 1.4
+    assert data["u"][0] == 2.0
+    assert data["up"][0] == 1.0
+    assert data["ui"][0] == 0.5
+    assert data["ud"][0] == 0.25
+
+
+def test_write_wraps_and_keeps_recent_values():
+    buffer = SampleBuffer(capacity=4)
+    _fill(buffer, 6)
+    data = buffer.tail(4)
+    assert list(np.round(data["t"], 6)) == [0.2, 0.3, 0.4, 0.5]
+    assert buffer.total == 6
+    assert buffer.span() == (0.2, 0.5)

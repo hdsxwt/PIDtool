@@ -1,9 +1,32 @@
 from __future__ import annotations
 
+import sys
+import types
+
 import pytest
 
-from pidtool.ai.llm import LLMError, Suggestion, parse_suggestion
-from pidtool.ai.prompts import build_user_prompt
+from pidtool.ai.llm import DeepSeekTuner, LLMError, Suggestion, parse_suggestion
+from pidtool.ai.prompts import _fmt, build_user_prompt
+
+
+def _install_fake_openai(monkeypatch, content: str | None):
+    fake = types.ModuleType("openai")
+    state: dict = {}
+
+    class _Completions:
+        def create(self, **kwargs):
+            state.setdefault("create", []).append(kwargs)
+            message = types.SimpleNamespace(content=content)
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+
+    class _Client:
+        def __init__(self, api_key=None, base_url=None, timeout=None):
+            state["init"] = {"api_key": api_key, "base_url": base_url, "timeout": timeout}
+            self.chat = types.SimpleNamespace(completions=_Completions())
+
+    fake.OpenAI = _Client
+    monkeypatch.setitem(sys.modules, "openai", fake)
+    return state
 
 
 def test_parse_suggestion_ok():
@@ -119,3 +142,80 @@ def test_build_user_prompt_includes_waveform():
     assert "降采样波形" in text
     assert "0,2,1,3,1,1,0.1" in text
     assert "0.01,2,1.2,4,2,1.5,0.1" in text
+
+
+def test_fmt_handles_invalid_values():
+    assert _fmt(None, ".2f") == "—"
+    assert _fmt("abc", ".2f") == "—"
+    assert _fmt(float("nan"), ".2f") == "—"
+    assert _fmt(float("inf"), ".2f") == "—"
+    assert _fmt(float("-inf"), ".2f") == "—"
+    assert _fmt(1.234, ".2f") == "1.23"
+
+
+def test_build_user_prompt_tolerates_missing_and_invalid_fields():
+    history = [
+        {
+            "kp": "bad",
+            "ki": None,
+            "kd": float("nan"),
+            "overshoot_pct": None,
+            "rise_time": "x",
+            "settling_time": float("inf"),
+            "steady_error": 0.001,
+            "oscillating": True,
+            "score": float("nan"),
+            "waveform": {"t": [0.0, 0.01]},
+        },
+        {"kind": "disturbance", "kp": 1.0, "ki": 1.0, "kd": 0.0},
+    ]
+    limits = {
+        "kp": {"min": 0.0, "max": 500.0},
+        "ki": {"min": 0.0, "max": 5000.0},
+        "kd": {"min": 0.0, "max": 100.0},
+    }
+    text = build_user_prompt(history, limits, 2.0)
+    assert "第?轮（阶跃）" in text
+    assert "Kp=—" in text
+    assert "振荡=是" in text
+    assert "评分=—" in text
+    assert "最大偏差=—" in text
+    assert "降采样波形" in text
+
+
+def test_build_user_prompt_empty_limits():
+    text = build_user_prompt([], {}, 1.0)
+    assert "Kp∈[None, None]" in text
+    assert "历史实验" in text
+
+
+def test_deepseek_tuner_suggest(monkeypatch):
+    state = _install_fake_openai(
+        monkeypatch, '{"kp": 9.0, "ki": 8.0, "kd": 0.7, "reasoning": "because"}'
+    )
+    tuner = DeepSeekTuner("key-1", "https://example.test", "model-x", timeout=12.0)
+    assert state["init"] == {
+        "api_key": "key-1",
+        "base_url": "https://example.test",
+        "timeout": 12.0,
+    }
+    assert tuner.model == "model-x"
+    suggestion = tuner.suggest(
+        [{"iteration": 1, "kp": 1.0, "ki": 2.0, "kd": 0.1, "score": 3.0}],
+        {"kp": {"min": 0.0, "max": 100.0}},
+        2.0,
+    )
+    assert suggestion == Suggestion(9.0, 8.0, 0.7, "because")
+    call = state["create"][0]
+    assert call["model"] == "model-x"
+    assert call["response_format"] == {"type": "json_object"}
+    assert call["temperature"] == 0.2
+    assert "历史实验" in call["messages"][1]["content"]
+    assert call["messages"][0]["role"] == "system"
+
+
+def test_deepseek_tuner_invalid_response(monkeypatch):
+    _install_fake_openai(monkeypatch, None)
+    tuner = DeepSeekTuner("key", "url", "model")
+    with pytest.raises(LLMError):
+        tuner.suggest([], {}, 1.0)

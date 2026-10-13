@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from pidtool.workspace import DEFAULT_SETTINGS, Workspace, ensure_gitignore
 
 
@@ -55,3 +57,49 @@ def test_gitignore_appended_and_idempotent(tmp_path):
 def test_gitignore_created_when_missing(tmp_path):
     assert ensure_gitignore(tmp_path)
     assert (tmp_path / ".gitignore").read_text(encoding="utf-8").strip() == ".pidtool/"
+
+
+def test_workspace_requires_directory(tmp_path):
+    file_path = tmp_path / "not_a_dir.txt"
+    file_path.write_text("x", encoding="utf-8")
+    with pytest.raises(NotADirectoryError):
+        Workspace(file_path)
+
+
+def test_settings_defaults_when_file_missing(tmp_path):
+    workspace = Workspace(tmp_path)
+    assert not workspace.settings_path.exists()
+    settings = workspace.load_settings()
+    assert settings["gains"] == DEFAULT_SETTINGS["gains"]
+    assert settings["safety"] == DEFAULT_SETTINGS["safety"]
+
+
+def test_settings_corrupt_file_falls_back_to_defaults(tmp_path):
+    workspace = Workspace(tmp_path)
+    workspace.ensure()
+    workspace.settings_path.write_text("this is = not [valid toml", encoding="utf-8")
+    settings = workspace.load_settings()
+    assert settings["serial"]["baud"] == DEFAULT_SETTINGS["serial"]["baud"]
+    assert settings["link"]["type"] == "mock"
+
+
+def test_read_trials_missing_file_and_bad_lines(tmp_path):
+    workspace = Workspace(tmp_path)
+    assert workspace.read_trials() == []
+    workspace.ensure()
+    workspace.trials_path.write_text(
+        '{"kind": "ok"}\n'
+        "\n"
+        "not json at all\n"
+        '{"kind": "ok2"}\n',
+        encoding="utf-8",
+    )
+    trials = workspace.read_trials()
+    assert [trial["kind"] for trial in trials] == ["ok", "ok2"]
+
+
+def test_gitignore_variant_without_slash(tmp_path):
+    (tmp_path / ".gitignore").write_text("build/\n.pidtool", encoding="utf-8")
+    assert ensure_gitignore(tmp_path)
+    text = (tmp_path / ".gitignore").read_text(encoding="utf-8")
+    assert text.count(".pidtool") == 1

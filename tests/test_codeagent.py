@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -203,3 +204,191 @@ def test_run_cancelled(tmp_path):
     result = agent.run("x", tmp_path, lambda line: None, should_stop)
     assert result.cancelled
     assert not result.timed_out
+
+
+class BlockingAgent:
+    name = "blocking"
+
+    def __init__(self, workdir_file: str) -> None:
+        self.workdir_file = workdir_file
+
+    def build_command(self, prompt, workdir):
+        return ["blocking"]
+
+    def run(self, prompt, workdir, on_line, should_stop) -> AgentRunResult:
+        (Path(workdir) / self.workdir_file).write_text("x", encoding="utf-8")
+        while not should_stop():
+            time.sleep(0.01)
+        return AgentRunResult(
+            exit_code=0,
+            timed_out=False,
+            cancelled=True,
+            output_tail=[],
+            duration_s=0.1,
+        )
+
+
+class RaisingAgent:
+    name = "raising"
+
+    def build_command(self, prompt, workdir):
+        return ["raising"]
+
+    def run(self, prompt, workdir, on_line, should_stop):
+        raise RuntimeError("agent exploded")
+
+
+def test_precheck_missing_directory(tmp_path):
+    assert CodeEditSession.precheck(tmp_path / "nope") == ["工作目录不存在"]
+
+
+def test_build_code_prompt_without_context():
+    text = build_code_prompt("只改 pid.c", Path("C:/firmware"))
+    assert "只改 pid.c" in text
+    assert "当前 PID 参数" not in text
+    assert "最近一次实验指标" not in text
+
+
+def test_build_code_prompt_full_metrics_summary():
+    text = build_code_prompt(
+        "调参",
+        Path("C:/firmware"),
+        metrics={
+            "overshoot_pct": 5.0,
+            "rise_time": 0.049,
+            "settling_time": 0.75,
+            "steady_error": 0.0003,
+            "recovery_time": 1.234,
+            "oscillating": True,
+        },
+    )
+    assert "超调=5.00%" in text
+    assert "上升=0.0490s" in text
+    assert "调节=0.7500s" in text
+    assert "稳态误差=+0.00030" in text
+    assert "恢复=1.234s" in text
+    assert "振荡=是" in text
+
+
+def test_session_properties_and_rollback_without_outcome(tmp_path):
+    session = CodeEditSession()
+    assert not session.active
+    assert session.workdir is None
+    assert session.outcome is None
+    assert session.rollback() == []
+    session.clear()
+    assert session.outcome is None
+
+
+def test_session_rejects_start_while_active(tmp_path):
+    repo = _make_repo(tmp_path)
+    session = CodeEditSession()
+    session.start(BlockingAgent("a.c"), repo, "one")
+    try:
+        with pytest.raises(RuntimeError):
+            session.start(StubAgent({}), repo, "two")
+    finally:
+        session.cancel()
+        _wait_for_done(session)
+    assert not session.active
+    assert session.outcome is not None
+    assert session.outcome.cancelled
+
+
+def test_session_restart_clears_previous_outcome(tmp_path):
+    repo = _make_repo(tmp_path)
+    session = CodeEditSession()
+    session.start(StubAgent({"pid.c": "float kp = 2.0f;\n"}), repo, "one")
+    _wait_for_done(session)
+    assert session.outcome is not None
+    session.start(StubAgent({"pid.c": "float kp = 3.0f;\n"}), repo, "two")
+    events = _wait_for_done(session)
+    assert any(kind == "started" for kind, _ in events)
+    assert session.outcome is not None
+    assert "kp = 3.0f" in session.outcome.diff_text
+
+
+def test_session_captures_agent_exception(tmp_path):
+    repo = _make_repo(tmp_path)
+    session = CodeEditSession()
+    session.start(RaisingAgent(), repo, "boom")
+    _wait_for_done(session)
+    outcome = session.outcome
+    assert outcome is not None
+    assert outcome.exit_code == -1
+    assert "agent exploded" in outcome.error
+    assert not outcome.timed_out and not outcome.cancelled
+    session.clear()
+    assert session.outcome is None
+
+
+def test_session_clear_noop_while_active(tmp_path):
+    repo = _make_repo(tmp_path)
+    session = CodeEditSession()
+    session.start(BlockingAgent("a.c"), repo, "keep")
+    session.clear()
+    assert session.active
+    session.cancel()
+    _wait_for_done(session)
+    assert session.outcome is not None
+
+
+def test_session_tracks_workdir(tmp_path):
+    repo = _make_repo(tmp_path)
+    session = CodeEditSession()
+    session.start(StubAgent({}), repo, "noop")
+    assert session.workdir == repo
+    _wait_for_done(session)
+
+
+def test_run_raises_code_agent_error(tmp_path):
+    class MissingExeAgent(OpencodeAgent):
+        def build_command(self, prompt, workdir):
+            return ["definitely-not-a-real-exe-xyz"]
+
+    agent = MissingExeAgent()
+    with pytest.raises(CodeAgentError):
+        agent.run("x", tmp_path, lambda line: None, lambda: False)
+
+
+def test_run_trims_output_tail(tmp_path):
+    agent = FakeProcAgent(
+        "for i in range(450): print('line-%d' % i)", timeout=30
+    )
+    lines: list[str] = []
+    result = agent.run("x", tmp_path, lines.append, lambda: False)
+    assert result.exit_code == 0
+    assert len(result.output_tail) == 400
+    assert result.output_tail[-1] == "line-449"
+    assert len(lines) == 450
+
+
+def test_run_kill_after_wait_timeout(monkeypatch, tmp_path):
+    class FakeProc:
+        def __init__(self) -> None:
+            self.stdout = iter(())
+            self.killed = False
+
+        def kill(self) -> None:
+            self.killed = True
+
+        def wait(self, timeout=None):
+            raise subprocess.TimeoutExpired(cmd="fake", timeout=timeout or 1)
+
+    proc = FakeProc()
+    monkeypatch.setattr(
+        "pidtool.codeagent.agent.subprocess.Popen", lambda *args, **kwargs: proc
+    )
+    agent = OpencodeAgent(executable=sys.executable, timeout=5)
+    result = agent.run("x", tmp_path, lambda line: None, lambda: False)
+    assert result.exit_code == -1
+    assert proc.killed
+
+
+def test_batch_launcher_directory_is_tolerated(tmp_path):
+    bat_dir = tmp_path / "launcher.bat"
+    bat_dir.mkdir()
+    agent = OpencodeAgent(executable=str(bat_dir))
+    command = agent.build_command("x", tmp_path)
+    assert command[1] == "/c"
+    assert command[2] == str(bat_dir)

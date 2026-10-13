@@ -97,3 +97,32 @@ def test_apply_plan_settings_persists(qapp, tmp_path):
     assert auto["recover_s"] == 2.0
     assert "→ 4 轮" in window.ai_plan_summary.text()
     window.close()
+
+
+def test_autotune_plan_dialog_empty_plan_gets_default_row(qapp):
+    dialog = AutotunePlanDialog({"plan": []})
+    assert dialog._plan() == ["step"]
+    assert "共 1 轮" in dialog.summary.text()
+    dialog.close()
+
+
+def test_autotune_plan_dialog_remove_last_row_adds_default(qapp):
+    dialog = AutotunePlanDialog({"plan": ["step"]})
+    dialog.list.setCurrentRow(0)
+    dialog._remove_selected()
+    assert dialog._plan() == ["step"]
+    dialog.close()
+
+
+def test_autotune_plan_dialog_move_without_selection_is_noop(qapp):
+    dialog = AutotunePlanDialog({"plan": ["step", "disturbance"]})
+    dialog.list.setCurrentRow(-1)
+    dialog._move_selected(1)
+    assert dialog._plan() == ["step", "disturbance"]
+    dialog.list.setCurrentRow(0)
+    dialog._move_selected(-1)
+    assert dialog._plan() == ["step", "disturbance"]
+    dialog.list.setCurrentRow(1)
+    dialog._move_selected(1)
+    assert dialog._plan() == ["step", "disturbance"]
+    dialog.close()

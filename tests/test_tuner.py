@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
+
+import pytest
 
 from pidtool.ai.llm import Suggestion
 from pidtool.ai.tuner import AutoTuner
@@ -341,3 +344,157 @@ def test_pause_motor_events():
     tuner.on_trial(make_metrics(), {"kp": 5.0, "ki": 40.0, "kd": 0.1}, 2.0)
     assert not tuner.active
     assert kinds(events)[-2:] == ["pause_motor", "finished"]
+
+
+def test_best_score_property():
+    events: list[tuple[str, dict]] = []
+    tuner = AutoTuner(lambda k, d: events.append((k, d)), async_mode=False)
+    assert tuner.best_score is None
+    tuner.start(
+        1.0,
+        1.0,
+        0.0,
+        plan=["step"] * 2,
+        loops=1,
+        suggest=lambda h, l, sp: Suggestion(2.0, 2.0, 0.0, ""),
+        limits=LIMITS,
+        setpoint=1.0,
+    )
+    tuner.on_trial(make_metrics(overshoot=4.0, settle=0.2, rise=0.05), {"kp": 1.0, "ki": 1.0, "kd": 0.0}, 1.0)
+    assert tuner.best_score is not None
+    assert tuner.best_score > 0.0
+    tuner.abort()
+
+
+def test_start_while_active_raises():
+    tuner = AutoTuner(lambda k, d: None, async_mode=False)
+    kwargs = dict(
+        plan=["step"],
+        loops=1,
+        suggest=lambda h, l, sp: Suggestion(1.0, 1.0, 0.0, ""),
+        limits=LIMITS,
+        setpoint=1.0,
+    )
+    tuner.start(1.0, 1.0, 0.0, **kwargs)
+    with pytest.raises(RuntimeError):
+        tuner.start(1.0, 1.0, 0.0, **kwargs)
+    tuner.abort()
+
+
+def test_invalid_plan_and_loops_are_sanitized():
+    events: list[tuple[str, dict]] = []
+    tuner = AutoTuner(lambda k, d: events.append((k, d)), async_mode=False)
+    tuner.start(
+        1.0,
+        1.0,
+        0.0,
+        plan=["nonsense", "step", "bogus"],
+        loops=0,
+        suggest=lambda h, l, sp: Suggestion(1.0, 1.0, 0.0, ""),
+        limits=LIMITS,
+        setpoint=1.0,
+    )
+    run_payloads = [d for k, d in events if k == "run_experiment"]
+    assert run_payloads[0]["kind"] == "step"
+    apply_payload = [d for k, d in events if k == "apply_gains"][0]
+    assert apply_payload["total"] == 1
+    tuner.abort()
+
+    events.clear()
+    tuner.start(
+        1.0,
+        1.0,
+        0.0,
+        plan=["bogus"],
+        loops=1,
+        suggest=lambda h, l, sp: Suggestion(1.0, 1.0, 0.0, ""),
+        limits=LIMITS,
+        setpoint=1.0,
+    )
+    assert any(k == "run_experiment" and d["kind"] == "step" for k, d in events)
+    tuner.abort()
+
+
+def test_on_trial_ignored_when_inactive():
+    events: list[tuple[str, dict]] = []
+    tuner = AutoTuner(lambda k, d: events.append((k, d)), async_mode=False)
+    tuner.on_trial(make_metrics(), {"kp": 1.0, "ki": 1.0, "kd": 0.0}, 1.0)
+    assert events == []
+    tuner.tick()
+
+
+def test_invalid_metrics_finish_tuning():
+    events: list[tuple[str, dict]] = []
+    tuner = AutoTuner(lambda k, d: events.append((k, d)), async_mode=False)
+    tuner.start(
+        1.0,
+        1.0,
+        0.0,
+        plan=["step"] * 5,
+        loops=1,
+        suggest=lambda h, l, sp: Suggestion(1.0, 1.0, 0.0, ""),
+        limits=LIMITS,
+        setpoint=1.0,
+    )
+    tuner.on_trial(None, {"kp": 1.0, "ki": 1.0, "kd": 0.0}, 1.0)
+    assert not tuner.active
+    assert events[-1][0] == "finished"
+    assert events[-1][1]["reason"] == "实验数据无效，停止调参"
+
+
+def test_nan_suggestion_clamped_to_minimum():
+    events: list[tuple[str, dict]] = []
+    tuner = AutoTuner(lambda k, d: events.append((k, d)), async_mode=False)
+    tuner.start(
+        1.0,
+        1.0,
+        0.0,
+        plan=["step"] * 2,
+        loops=1,
+        suggest=lambda h, l, sp: Suggestion(float("nan"), float("nan"), float("nan"), ""),
+        limits=LIMITS,
+        setpoint=1.0,
+    )
+    tuner.on_trial(make_metrics(), {"kp": 1.0, "ki": 1.0, "kd": 0.0}, 1.0)
+    tuner.tick()
+    apply_payload = [d for k, d in events if k == "apply_gains"][-1]
+    assert apply_payload["kp"] == LIMITS["kp"]["min"]
+    assert apply_payload["ki"] == LIMITS["ki"]["min"]
+    assert apply_payload["kd"] == LIMITS["kd"]["min"]
+    tuner.abort()
+
+
+def test_scoring_penalties_and_none():
+    from pidtool.ai.scoring import score_metrics
+
+    assert score_metrics("step", None) == float("inf")
+    assert score_metrics("disturbance", None, 1.0) == float("inf")
+    assert score_metrics("unknown-kind", None) == float("inf")
+
+    nan = float("nan")
+    step = StepMetrics(
+        rise_time=nan,
+        peak_time=nan,
+        overshoot_pct=0.0,
+        settling_time=nan,
+        steady_error=0.0,
+        tail_ripple=0.0,
+        oscillating=False,
+        samples=10,
+    )
+    assert score_metrics("step", step) == 150.0
+    step_osc = replace(step, oscillating=True)
+    assert score_metrics("step", step_osc) == 250.0
+
+    dist = DisturbanceMetrics(
+        max_deviation=0.1,
+        max_deviation_time=1.0,
+        recovery_time=nan,
+        residual_error=0.0,
+        tail_ripple=0.0,
+        oscillating=False,
+        samples=10,
+    )
+    assert score_metrics("disturbance", dist, 1.0) == 110.0
+    dist_osc = replace(dist, oscillating=True)
+    assert score_metrics("disturbance", dist_osc, 1.0) == 210.0

@@ -187,3 +187,56 @@ def test_autotune_disturbance_script_structure():
     assert len(manual) == 1
     collect_end = [s for s in script.steps if s.kind == "collect_end"][0]
     assert collect_end.params["kind"] == "disturbance"
+
+
+def test_runner_properties_and_inactive_calls():
+    clock = FakeClock()
+    events: list[tuple[str, dict]] = []
+    runner = make_runner(events, clock)
+    assert not runner.active
+    assert runner.script_name == ""
+    assert runner.step_index == 0
+    runner.abort()
+    runner.confirm()
+    runner.tick()
+    assert events == []
+
+    script = ExperimentScript("t", (ExperimentStep("wait", {"seconds": 1.0}),))
+    runner.start(script)
+    assert runner.active
+    assert runner.script_name == "t"
+    assert runner.step_index == 0
+    runner.abort()
+    assert not runner.active
+    assert runner.script_name == ""
+    assert runner.step_index == 0
+
+
+def test_runner_empty_script_finishes_immediately():
+    events: list[tuple[str, dict]] = []
+    runner = make_runner(events, FakeClock())
+    runner.start(ExperimentScript("empty", ()))
+    assert not runner.active
+    assert events == [("started", {"name": "empty", "steps": 0}), ("finished", {"name": "empty"})]
+
+
+def test_runner_confirm_ignored_when_waiting():
+    clock = FakeClock()
+    events: list[tuple[str, dict]] = []
+    runner = make_runner(events, clock)
+    runner.start(ExperimentScript("t", (ExperimentStep("wait", {"seconds": 1.0}),)))
+    runner.confirm()
+    assert runner.active
+    assert [k for k, _ in events] == ["started", "wait"]
+
+
+def test_runner_restart_after_finish():
+    clock = FakeClock()
+    events: list[tuple[str, dict]] = []
+    runner = make_runner(events, clock)
+    runner.start(ExperimentScript("a", (ExperimentStep("mark", {"label": "x"}),)))
+    assert not runner.active
+    runner.start(ExperimentScript("b", (ExperimentStep("mark", {"label": "y"}),)))
+    assert not runner.active
+    finished_names = [d["name"] for k, d in events if k == "finished"]
+    assert finished_names == ["a", "b"]
