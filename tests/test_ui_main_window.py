@@ -639,7 +639,7 @@ def test_open_dialogs_accepted(window, monkeypatch):
 
     monkeypatch.setattr(mw, "LLMSettingsDialog", FakeLLMDialog)
     window._open_llm_settings_dialog()
-    assert window.app_config.data["llm"]["api_key"] == "k3"
+    assert window.app_config.get_api_key() == "k3"
     assert window.app_config.data["llm"]["base_url"] == "https://api.deepseek.com"
     assert "已配置 Key" in window.llm_summary.text()
 

@@ -27,7 +27,7 @@
 | `last_workspace` | string | 上次使用的工作区 |
 | `llm.base_url` | string | OpenAI 兼容端点（默认 `https://api.deepseek.com`） |
 | `llm.model` | string | 模型名（默认 `deepseek-flash`，即 DeepSeek-V4.1-Flash） |
-| `llm.api_key` | string | API Key（仅存本机） |
+| `llm.api_key` | string | API Key（Windows DPAPI 加密后存储，仅本机可解，重启后自动迁移明文） |
 | `codeagent.executable` | string | opencode 可执行文件（默认 `opencode`） |
 | `codeagent.agent_name` | string | 可选的受限 agent 名称 |
 | `codeagent.timeout_s` | int | 代码修改任务超时秒数（默认 900） |

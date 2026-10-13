@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 from pidtool.app_config import DEFAULT_LLM_MODEL, AppConfig
+
+WINDOWS = sys.platform.startswith("win")
 
 
 def test_default_model(tmp_path):
@@ -14,7 +20,11 @@ def test_legacy_model_migrated(tmp_path):
     path.write_text('[llm]\nmodel = "deepseek-chat"\napi_key = "k"\n', encoding="utf-8")
     config = AppConfig(path=path)
     assert config.data["llm"]["model"] == "deepseek-flash"
-    assert config.data["llm"]["api_key"] == "k"
+    assert config.get_api_key() == "k"
+    text = path.read_text(encoding="utf-8")
+    assert 'api_key = "k"' not in text
+    if WINDOWS:
+        assert "dpapi:" in text
 
 
 def test_empty_model_replaced(tmp_path):
@@ -62,9 +72,31 @@ def test_save_and_reload_roundtrip(tmp_path):
     config.data["ui"]["window_s"] = 20.0
     config.save()
     assert path.is_file()
+    text = path.read_text(encoding="utf-8")
+    assert "secret-key" not in text
     reloaded = AppConfig(path=path)
-    assert reloaded.data["llm"]["api_key"] == "secret-key"
+    assert reloaded.get_api_key() == "secret-key"
     assert reloaded.data["ui"]["window_s"] == 20.0
+
+
+def test_set_api_key_encrypts_at_rest(tmp_path):
+    path = tmp_path / "app.toml"
+    config = AppConfig(path=path)
+    config.set_api_key("s3cr3t-value")
+    config.save()
+    text = path.read_text(encoding="utf-8")
+    assert "s3cr3t-value" not in text
+    if WINDOWS:
+        assert "dpapi:" in text
+    assert AppConfig(path=path).get_api_key() == "s3cr3t-value"
+
+
+def test_set_empty_api_key_clears(tmp_path):
+    config = AppConfig(path=tmp_path / "app.toml")
+    config.set_api_key("something")
+    config.set_api_key("")
+    assert config.get_api_key() == ""
+    assert config.data["llm"]["api_key"] == ""
 
 
 def test_add_recent_deduplicates_and_caps(tmp_path):

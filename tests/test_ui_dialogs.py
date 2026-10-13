@@ -48,7 +48,7 @@ def test_apply_llm_settings_persists_and_updates_summary(qapp, tmp_path):
     )
     assert config.data["llm"]["model"] == DEFAULT_LLM_MODEL
     assert config.data["llm"]["base_url"] == "https://api.deepseek.com"
-    assert config.data["llm"]["api_key"] == "secret"
+    assert config.get_api_key() == "secret"
     assert "已配置 Key" in window.llm_summary.text()
     assert not hasattr(window, "llm_base_edit")
     window.close()

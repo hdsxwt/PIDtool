@@ -8,6 +8,8 @@ from typing import Any
 
 import tomli_w
 
+from pidtool.secure_store import DPAPI_PREFIX, protect, unprotect
+
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / "PIDtool"
 APP_CONFIG_PATH = APP_DIR / "app.toml"
 
@@ -72,11 +74,27 @@ class AppConfig:
         llm = self.data.setdefault("llm", {})
         if str(llm.get("model", "")).strip() in LEGACY_LLM_MODELS:
             llm["model"] = DEFAULT_LLM_MODEL
+        raw_key = str(llm.get("api_key", ""))
+        if raw_key and not raw_key.startswith(DPAPI_PREFIX):
+            llm["api_key"] = protect(raw_key)
+            self.save()
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        llm = self.data.setdefault("llm", {})
+        raw_key = str(llm.get("api_key", ""))
+        if raw_key and not raw_key.startswith(DPAPI_PREFIX):
+            llm["api_key"] = protect(raw_key)
         with self.path.open("wb") as fh:
             tomli_w.dump(self.data, fh)
+
+    def get_api_key(self) -> str:
+        return unprotect(str(self.data.get("llm", {}).get("api_key", "")))
+
+    def set_api_key(self, value: str) -> None:
+        llm = self.data.setdefault("llm", {})
+        value = (value or "").strip()
+        llm["api_key"] = protect(value) if value else ""
 
     def add_recent(self, path: str) -> None:
         recent = [p for p in self.data.get("recent_workspaces", []) if Path(p) != Path(path)]

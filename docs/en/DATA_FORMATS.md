@@ -29,7 +29,7 @@ the firmware repository.
 | `last_workspace` | string | Last used workspace |
 | `llm.base_url` | string | OpenAI-compatible endpoint (default `https://api.deepseek.com`) |
 | `llm.model` | string | Model name (default `deepseek-flash`, i.e. DeepSeek-V4.1-Flash) |
-| `llm.api_key` | string | API key (local only) |
+| `llm.api_key` | string | API key (stored encrypted via Windows DPAPI, decryptable only on this machine; legacy plaintext auto-migrates) |
 | `codeagent.executable` | string | opencode executable (default `opencode`) |
 | `codeagent.agent_name` | string | Optional restricted agent name |
 | `codeagent.timeout_s` | int | Code-edit task timeout, seconds (default 900) |

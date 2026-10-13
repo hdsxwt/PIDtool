@@ -1244,11 +1244,12 @@ class MainWindow(QtWidgets.QMainWindow):
     def _llm_summary_text(self) -> str:
         llm = self.app_config.data.get("llm", {})
         model = str(llm.get("model", DEFAULT_LLM_MODEL))
-        state = "已配置 Key" if str(llm.get("api_key", "")).strip() else "未配置 Key"
+        state = "已配置 Key" if self.app_config.get_api_key() else "未配置 Key"
         return f"{model} · {state}"
 
     def _open_llm_settings_dialog(self) -> None:
         llm = dict(self.app_config.data.get("llm", {}))
+        llm["api_key"] = self.app_config.get_api_key()
         dialog = LLMSettingsDialog(llm, self)
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             self._apply_llm_settings(dialog.values())
@@ -1257,15 +1258,15 @@ class MainWindow(QtWidgets.QMainWindow):
         llm = self.app_config.data.setdefault("llm", {})
         llm["base_url"] = values.get("base_url") or "https://api.deepseek.com"
         llm["model"] = values.get("model") or DEFAULT_LLM_MODEL
-        llm["api_key"] = values.get("api_key", "")
+        self.app_config.set_api_key(str(values.get("api_key", "")))
         self.app_config.save()
         self.llm_summary.setText(self._llm_summary_text())
-        self._status("LLM 设置已保存（全局配置，不写入固件目录）")
+        self._status("LLM 设置已保存（API Key 已加密，全局配置，不写入固件目录）")
 
     def _make_suggest(self):
         llm = self.app_config.data.get("llm", {})
         client = DeepSeekTuner(
-            api_key=str(llm.get("api_key", "")),
+            api_key=self.app_config.get_api_key(),
             base_url=str(llm.get("base_url", "https://api.deepseek.com")),
             model=str(llm.get("model", DEFAULT_LLM_MODEL)),
         )
@@ -1304,7 +1305,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.runner.active:
             self._status("实验运行中，无法启动自动调参")
             return
-        if not str(self.app_config.data.get("llm", {}).get("api_key", "")).strip():
+        if not self.app_config.get_api_key():
             QtWidgets.QMessageBox.information(
                 self, "缺少 API Key", "请先点击“DeepSeek 设置…”填写 API Key 并保存。"
             )
