@@ -15,7 +15,7 @@ from PySide6 import QtWidgets
 from pidtool.app_config import AppConfig
 from pidtool.codeagent import CodeEditOutcome, git_tools
 from pidtool.core.experiments import ExperimentScript, ExperimentStep
-from pidtool.core.experiments.specs import MARK_DISTURB_END, MARK_DISTURB_START
+from pidtool.core.experiments.specs import MARK_DISTURB_END, MARK_DISTURB_START, MARK_STEP
 from pidtool.link.mock_link import MockLink
 from pidtool.link.protocol import (
     MODE_IDLE,
@@ -571,6 +571,34 @@ def test_finish_collect_guards(window):
     window._script_marks = []
     window._finish_collect("step")
     assert "阶跃窗口无效" in window.statusBar().currentMessage()
+
+
+def test_finish_collect_ringing_baseline_yields_metrics(window):
+    def value(t: float) -> float:
+        if t < 2.0:
+            return 400.0 + 200.0 * np.sin(2.0 * np.pi * 1.4 * t)
+        return 600.0 - 200.0 * np.exp(-(t - 2.0) / 0.08)
+
+    _manual_link(window, value, count=600)
+    window._capture_t0 = 0.0
+    window._capture_sp = 600.0
+    window._script_marks = [(2.0, MARK_STEP)]
+    captured: dict = {}
+
+    def spy(metrics, gains, setpoint, kind="step", waveform=None):
+        captured["metrics"] = metrics
+        captured["kind"] = kind
+
+    window.tuner._active = True
+    window.tuner.on_trial = spy
+    try:
+        window._finish_collect("step")
+    finally:
+        window.tuner._active = False
+
+    assert captured["kind"] == "step"
+    assert captured["metrics"] is not None
+    assert "实验指标已计算" in window.statusBar().currentMessage()
 
 
 def test_finish_collect_disturbance_with_waveform(window, tmp_path):

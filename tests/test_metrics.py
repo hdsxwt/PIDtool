@@ -104,6 +104,37 @@ def test_no_step_returns_none():
     assert analyze_step(t, y, 1.0) is None
 
 
+def test_step_negligible_relative_to_scale_returns_none():
+    t = np.arange(0.0, 1.0, 0.001)
+    y = np.full_like(t, 1000.0)
+    assert analyze_step(t, y, 1002.0) is None
+
+
+def test_small_but_significant_step_is_valid():
+    t = np.arange(0.0, 2.0, 0.001)
+    y = np.full_like(t, 1000.0)
+    mask = t >= 0.3
+    y[mask] = 1010.0 - 10.0 * np.exp(-(t[mask] - 0.3) / 0.05)
+    m = analyze_step(t, y, 1010.0)
+    assert m is not None
+    assert abs(m.rise_time - 0.05 * np.log(9.0)) < 0.01
+
+
+def test_step_with_ringing_baseline_is_valid():
+    t = np.arange(0.0, 4.0, 0.005)
+    y = 400.0 + 200.0 * np.sin(2.0 * np.pi * 1.4 * t)
+    mask = t >= 1.0
+    y[mask] = 600.0 - 200.0 * np.exp(-(t[mask] - 1.0) / 0.08)
+
+    m = analyze_step(t, y, 600.0, step_time=1.0)
+    assert m is not None
+    assert abs(m.rise_time - 0.08 * np.log(9.0)) < 0.01
+    assert m.overshoot_pct == 0.0
+    assert abs(m.steady_error) < 1e-6
+    assert abs(m.settling_time - 0.08 * np.log(50.0)) < 0.02
+    assert not m.oscillating
+
+
 def test_rmse():
     y = np.array([1.0, 2.0, 3.0])
     assert abs(rmse(y, 1.0) - np.sqrt((0.0 + 1.0 + 4.0) / 3.0)) < 1e-12

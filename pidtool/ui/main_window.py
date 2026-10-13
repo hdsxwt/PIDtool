@@ -1171,12 +1171,14 @@ class MainWindow(QtWidgets.QMainWindow):
             marks = {label: mt for mt, label in self._script_marks}
             step_t = marks.get(MARK_STEP)
             keep = None
+            step_time = None
             if step_t is not None:
-                start = max(float(tt[0]), float(step_t) - 0.3)
+                step_time = float(step_t)
+                start = max(float(tt[0]), step_time - 1.5)
                 keep = tt >= start
                 tt = tt[keep]
                 yy = yy[keep]
-            m = analyze_step(tt, yy, self._capture_sp)
+            m = analyze_step(tt, yy, self._capture_sp, step_time=step_time)
             if m is None:
                 fail("阶跃窗口无效（目标值与初始值过近）")
                 return

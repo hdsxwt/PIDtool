@@ -23,6 +23,7 @@ def analyze_step(
     setpoint: float,
     settle_band: float = 0.02,
     tail_fraction: float = 0.1,
+    step_time: float | None = None,
 ) -> StepMetrics | None:
     t = np.asarray(t, dtype=np.float64)
     y = np.asarray(y, dtype=np.float64)
@@ -32,18 +33,31 @@ def analyze_step(
     t = t[:n]
     y = y[:n]
 
-    head = max(3, n // 20)
-    y0 = float(np.mean(y[:head]))
+    post = np.ones(n, dtype=bool)
+    if step_time is not None:
+        step_time = float(step_time)
+        post = t >= step_time
+        if not post.any():
+            post = np.ones(n, dtype=bool)
+        pre = y[t < step_time]
+        if pre.size >= 3:
+            lo = float(np.percentile(pre, 10.0))
+            hi = float(np.percentile(pre, 90.0))
+            y0 = 0.5 * (lo + hi)
+        else:
+            y0 = float(np.mean(y[: max(3, n // 20)]))
+    else:
+        y0 = float(np.mean(y[: max(3, n // 20)]))
     delta = float(setpoint) - y0
-    head_std = float(np.std(y[:head]))
-    if abs(delta) < max(5.0 * head_std, 1e-9):
+    scale = max(abs(float(setpoint)), abs(y0), 1e-9)
+    if abs(delta) < max(0.005 * scale, 1e-9):
         return None
 
     z = (y - y0) / delta
-    t0 = float(t[0])
+    t0 = step_time if step_time is not None else float(t[0])
 
     def first_index(level: float) -> int | None:
-        hit = np.flatnonzero(z >= level)
+        hit = np.flatnonzero((z >= level) & post)
         return int(hit[0]) if hit.size else None
 
     i10 = first_index(0.1)
@@ -53,7 +67,7 @@ def analyze_step(
     else:
         rise = float("nan")
 
-    imax = int(np.argmax(z))
+    imax = int(np.flatnonzero(post)[np.argmax(z[post])])
     zmax = float(z[imax])
     if zmax > 1.0:
         overshoot = (zmax - 1.0) * 100.0
