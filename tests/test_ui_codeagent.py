@@ -77,6 +77,7 @@ def test_code_tab_flow_keep(qapp, tmp_path):
     assert "预检查" in window.code_console.toPlainText()
 
     window._make_code_agent = lambda: StubAgent({"pid.c": "float kp = 3.0f;\n"})
+    window._confirm_code_run = lambda: True
     window._code_run_clicked()
     assert window.code_session.active
     assert not window.code_preview_btn.isEnabled()
@@ -106,6 +107,7 @@ def test_code_tab_flow_rollback(qapp, tmp_path):
     window._make_code_agent = lambda: StubAgent(
         {"pid.c": "float kp = 9.0f;\n", "new.c": "int x;\n"}
     )
+    window._confirm_code_run = lambda: True
     window._code_run_clicked()
     assert _wait_until(
         qapp,

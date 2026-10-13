@@ -36,7 +36,7 @@ DEFAULT_APP_CONFIG: dict[str, Any] = {
         "executable": "opencode",
         "agent_name": "",
         "timeout_s": 900,
-        "auto_approve": True,
+        "auto_approve": False,
         "approved_adapters": {},
     },
     "autotune": DEFAULT_AUTOTUNE,

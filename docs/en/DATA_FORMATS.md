@@ -33,7 +33,7 @@ the firmware repository.
 | `codeagent.executable` | string | opencode executable (default `opencode`) |
 | `codeagent.agent_name` | string | Optional restricted agent name |
 | `codeagent.timeout_s` | int | Code-edit task timeout, seconds (default 900) |
-| `codeagent.auto_approve` | bool | Pass `--auto` (default true; required headless) |
+| `codeagent.auto_approve` | bool | Auto-approve tool permissions (`--auto`, default false; high risk, enabling needs confirmation) |
 | `codeagent.approved_adapters` | table | Trusted custom adapters: `absolute path → file sha256` (re-confirmed on change) |
 | `autotune.plan` | string[] | Test scheme list per loop (`"step"` / `"disturbance"`) |
 | `autotune.loops` | int | Loop count (total rounds = list length × loops) |

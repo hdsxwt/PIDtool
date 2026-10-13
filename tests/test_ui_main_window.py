@@ -923,6 +923,8 @@ def test_codeagent_settings_roundtrip(window):
     assert cfg["executable"] == "C:/tools/opencode.exe"
     assert cfg["agent_name"] == "pid-editor"
     assert cfg["timeout_s"] == 120
+    assert cfg["auto_approve"] is False
+    assert not window.code_auto_check.isChecked()
     assert "已保存" in window.statusBar().currentMessage()
 
     window.code_exe_edit.setText("")
@@ -931,6 +933,7 @@ def test_codeagent_settings_roundtrip(window):
     assert agent.executable == "opencode"
     assert agent.agent_name == ""
     assert agent.timeout == 120.0
+    assert agent.auto_approve is False
 
 
 def test_code_preview_guards(window, tmp_path):
@@ -1002,6 +1005,70 @@ def test_code_run_agent_and_start_failures(window, tmp_path, modal_recorder):
     window.code_session.start = start_boom
     window._code_run_clicked()
     assert modal_recorder[-1][1] == "启动失败"
+
+
+def test_code_auto_checkbox_requires_confirmation(window, monkeypatch):
+    assert not window.code_auto_check.isChecked()
+    window.code_auto_check.setChecked(True)
+    assert not window.code_auto_check.isChecked()
+
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "warning",
+        staticmethod(lambda *a, **k: QtWidgets.QMessageBox.StandardButton.Yes),
+    )
+    window.code_auto_check.setChecked(True)
+    assert window.code_auto_check.isChecked()
+
+
+def test_code_confirm_run_content(window, tmp_path, modal_recorder):
+    repo = _make_repo(tmp_path)
+    window._activate_workspace(repo)
+    window.code_request_edit.setPlainText("改 Kp")
+    window._code_preview_clicked()
+
+    assert window._confirm_code_run() is True
+    question = [call for call in modal_recorder if call[0] == "question"][-1]
+    assert "风险边界" in question[2]
+    assert "--auto" not in question[2].splitlines()[1]
+    assert "未启用 --auto" in question[2]
+
+    window.code_auto_check.blockSignals(True)
+    window.code_auto_check.setChecked(True)
+    window.code_auto_check.blockSignals(False)
+    assert window._confirm_code_run() is True
+    question = [call for call in modal_recorder if call[0] == "question"][-1]
+    assert "--auto" in question[2].splitlines()[1]
+    assert "已启用自动批准" in question[2]
+
+
+def test_code_run_declined_does_not_start(window, tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    window._activate_workspace(repo)
+    window.code_request_edit.setPlainText("改 Kp")
+    window._code_preview_clicked()
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        staticmethod(lambda *a, **k: QtWidgets.QMessageBox.StandardButton.No),
+    )
+    window._code_run_clicked()
+    assert not window.code_session.active
+    assert "取消" in window.statusBar().currentMessage()
+    assert window.code_status.text() == "已取消执行"
+
+
+def test_code_done_no_changes_hint(window):
+    outcome = CodeEditOutcome(
+        workdir=Path("."),
+        prompt="x",
+        exit_code=0,
+        timed_out=False,
+        cancelled=False,
+        duration_s=0.1,
+    )
+    window._on_code_done(outcome)
+    assert "自动批准" in window.code_status.text()
 
 
 def test_code_cancel_clicked(window):

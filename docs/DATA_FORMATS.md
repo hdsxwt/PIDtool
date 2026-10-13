@@ -31,7 +31,7 @@
 | `codeagent.executable` | string | opencode 可执行文件（默认 `opencode`） |
 | `codeagent.agent_name` | string | 可选的受限 agent 名称 |
 | `codeagent.timeout_s` | int | 代码修改任务超时秒数（默认 900） |
-| `codeagent.auto_approve` | bool | 是否传 `--auto`（默认 true，无头模式必需） |
+| `codeagent.auto_approve` | bool | 是否自动批准工具权限（`--auto`，默认 false；高风险，启用需确认） |
 | `codeagent.approved_adapters` | table | 已信任的自定义适配器：`绝对路径 → 文件 sha256`（改动后重新确认） |
 | `autotune.plan` | string[] | 每循环的测试方案列表（`"step"` / `"disturbance"`） |
 | `autotune.loops` | int | 方案列表循环次数（总轮数 = 列表长度 × 循环次数） |

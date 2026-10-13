@@ -459,9 +459,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.code_timeout_spin = QtWidgets.QSpinBox()
         self.code_timeout_spin.setRange(60, 3600)
         self.code_timeout_spin.setSuffix(" s")
+        self.code_auto_check = QtWidgets.QCheckBox("自动批准工具权限（--auto，高风险）")
+        self.code_auto_check.setToolTip(
+            "启用后 opencode 可自动执行命令与编辑；仓库外副作用不可审查也不可回滚，"
+            "仅在你信任该工程时启用"
+        )
+        self.code_auto_check.toggled.connect(self._on_code_auto_toggled)
         settings_form.addRow("可执行文件", self.code_exe_edit)
         settings_form.addRow("Agent", self.code_agent_edit)
         settings_form.addRow("超时", self.code_timeout_spin)
+        settings_form.addRow(self.code_auto_check)
         code_save_btn = QtWidgets.QPushButton("保存设置")
         code_save_btn.clicked.connect(self._save_codeagent_settings)
         settings_form.addRow(code_save_btn)
@@ -1526,21 +1533,64 @@ class MainWindow(QtWidgets.QMainWindow):
         self.code_exe_edit.setText(str(cfg.get("executable", "opencode")))
         self.code_agent_edit.setText(str(cfg.get("agent_name", "")))
         self.code_timeout_spin.setValue(int(cfg.get("timeout_s", 900)))
+        self.code_auto_check.blockSignals(True)
+        self.code_auto_check.setChecked(bool(cfg.get("auto_approve", False)))
+        self.code_auto_check.blockSignals(False)
 
     def _save_codeagent_settings(self) -> None:
         cfg = self.app_config.data.setdefault("codeagent", {})
         cfg["executable"] = self.code_exe_edit.text().strip() or "opencode"
         cfg["agent_name"] = self.code_agent_edit.text().strip()
         cfg["timeout_s"] = int(self.code_timeout_spin.value())
+        cfg["auto_approve"] = self.code_auto_check.isChecked()
         self.app_config.save()
         self._status("opencode 设置已保存（全局配置）")
 
+    def _on_code_auto_toggled(self, checked: bool) -> None:
+        if not checked:
+            return
+        answer = QtWidgets.QMessageBox.warning(
+            self,
+            "启用高风险权限",
+            "启用 --auto 后，opencode 将自动获得工具权限，可在工程目录执行任意命令。\n"
+            "diff 审查与回滚只覆盖仓库内 git 可见的改动，仓库外副作用不可见也不可回滚。\n\n"
+            "确定启用吗？",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+            self.code_auto_check.blockSignals(True)
+            self.code_auto_check.setChecked(False)
+            self.code_auto_check.blockSignals(False)
+
+    def _confirm_code_run(self) -> bool:
+        auto = self.code_auto_check.isChecked()
+        exe = self.code_exe_edit.text().strip() or "opencode"
+        agent = self.code_agent_edit.text().strip()
+        auto_part = " --auto" if auto else ""
+        agent_part = f" --agent {agent}" if agent else ""
+        workdir = self.workspace.root if self.workspace is not None else "?"
+        command = f'{exe} run --dir "{workdir}"{auto_part}{agent_part} "<提示词>"'
+        lines = [
+            "将执行命令：",
+            command,
+            "",
+            "风险边界：",
+            "- diff 审查与回滚只覆盖仓库内 git 可见的改动；仓库外副作用（写文件、联网、改系统状态）不可见也不可回滚",
+            "- 工程内容可能影响代理行为（prompt injection）",
+        ]
+        if auto:
+            lines.append("- 已启用自动批准（--auto）：代理将自动获得工具权限")
+        else:
+            lines.append("- 未启用 --auto：opencode 可能因权限受限而无法编辑文件")
+        answer = QtWidgets.QMessageBox.question(self, "授权执行确认", "\n".join(lines))
+        return answer == QtWidgets.QMessageBox.StandardButton.Yes
+
     def _make_code_agent(self) -> OpencodeAgent:
-        cfg = self.app_config.data.get("codeagent", {})
         return OpencodeAgent(
             executable=self.code_exe_edit.text().strip() or "opencode",
             agent_name=self.code_agent_edit.text().strip(),
-            auto_approve=bool(cfg.get("auto_approve", True)),
+            auto_approve=self.code_auto_check.isChecked(),
             timeout=float(self.code_timeout_spin.value()),
         )
 
@@ -1557,7 +1607,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._code_prompt = build_code_prompt(request, self.workspace.root, gains, metrics)
         exe = self.code_exe_edit.text().strip() or "opencode"
         agent_part = f" --agent {self.code_agent_edit.text().strip()}" if self.code_agent_edit.text().strip() else ""
-        command_line = f'{exe} run --dir "{self.workspace.root}" --auto{agent_part} "<提示词>"'
+        auto_part = " --auto" if self.code_auto_check.isChecked() else ""
+        command_line = f'{exe} run --dir "{self.workspace.root}"{auto_part}{agent_part} "<提示词>"'
         problems = CodeEditSession.precheck(self.workspace.root)
         problem_text = "\n".join(f"- {p}" for p in problems)
         preview = [
@@ -1590,6 +1641,10 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(
                 self, "预检查未通过", "\n".join(f"- {p}" for p in problems)
             )
+            return
+        if not self._confirm_code_run():
+            self._status("已取消：本次执行未授权")
+            self.code_status.setText("已取消执行")
             return
         try:
             agent = self._make_code_agent()
@@ -1643,7 +1698,16 @@ class MainWindow(QtWidgets.QMainWindow):
         has_changes = bool(outcome.diff_text.strip() or outcome.new_files)
         self.code_keep_btn.setEnabled(has_changes)
         self.code_rollback_btn.setEnabled(True)
-        self.code_status.setText("执行结束（{}）；请审查 diff 后选择保留或回滚".format("，".join(status_bits)))
+        status_text = "执行结束（{}）".format("，".join(status_bits))
+        if has_changes:
+            self.code_status.setText(f"{status_text}；请审查 diff 后选择保留或回滚")
+        elif self.code_auto_check.isChecked():
+            self.code_status.setText(f"{status_text}；未检测到改动")
+        else:
+            self.code_status.setText(
+                f"{status_text}；未检测到改动。若需要自动编辑，"
+                "请启用“自动批准工具权限（--auto）”后重试"
+            )
 
     def _code_keep_clicked(self) -> None:
         outcome = self.code_session.outcome

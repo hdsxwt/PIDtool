@@ -105,10 +105,17 @@ removes files created by the run).
 
 Notes:
 
-- Default command: `opencode run --dir <project> --auto "<prompt>"`; the
-  executable, restricted agent and timeout are configurable on the tab
-- The prompt includes scope constraints (PID-related sources only, no flashing);
-  the hard guarantee is still the diff review
+- Default command: `opencode run --dir <project> "<prompt>"` (**no `--auto`** by
+  default); the executable, restricted agent and timeout are configurable
+- Every authorized run shows a confirmation dialog listing the command and the
+  risk boundary; to let the agent edit automatically, explicitly tick
+  "自动批准工具权限（--auto）" (high risk, with a second warning; off by default —
+  without it opencode may be unable to edit due to permission limits)
+- The prompt includes scope constraints (PID-related sources only, no flashing)
+- **Boundary**: diff review and rollback only cover git-visible changes inside
+  the repository; out-of-repo side effects (files, network, system state) are
+  neither visible nor revertable, and repository content can influence the
+  agent (prompt injection) — use this only with trusted projects and sources
 - Building and flashing remain manual (or separately authorized); the tool
   never auto-flashes
 
