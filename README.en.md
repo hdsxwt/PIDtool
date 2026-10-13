@@ -79,12 +79,14 @@ Four tabs at the bottom:
 
 ### AI tuning flow and safety
 
-Each round: apply gains -> run the round's scheme (step rounds return to a
-baseline first; disturbance rounds settle at the target and then prompt you to
-apply resistance) -> extract metrics -> unified score -> DeepSeek proposes the
-next gains -> clamp. Configure the per-loop scheme list (step/disturbance) and
-loop count in the "调参方案…" dialog; total rounds = list length × loops.
-Disturbance rounds ask you to apply/stop resistance via the banner. Safety: workspace limits, per-round recording, **restore of the
+Hierarchy: a full plan = cycles × round list; each round is an ordered list of
+individually configured actions (e.g. 0→300→600→disturbance). All action results
+of a round are sent to the AI together as one evaluation (round score = mean +
+variance of action scores, penalizing inconsistency), then the next gains are
+applied. The "调参方案…" dialog lets you add/remove/reorder rounds and actions and
+edit each action's parameters. Disturbance actions ask you to apply/stop
+resistance via the banner; the motor is stopped while waiting for the AI and when
+tuning ends. Safety: workspace limits, per-round recording, **restore of the
 best gains at the end**, early stop on oscillation or repeated degradation,
 abort anytime. The API key is stored only in the global config
 (`%APPDATA%/PIDtool/app.toml`).

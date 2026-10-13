@@ -35,10 +35,10 @@ the firmware repository.
 | `codeagent.timeout_s` | int | Code-edit task timeout, seconds (default 900) |
 | `codeagent.auto_approve` | bool | Auto-approve tool permissions (`--auto`, default false; high risk, enabling needs confirmation) |
 | `codeagent.approved_adapters` | table | Trusted custom adapters: `absolute path → file sha256` (re-confirmed on change) |
-| `autotune.plan` | string[] | Test scheme list per loop (`"step"` / `"disturbance"`) |
-| `autotune.loops` | int | Loop count (total rounds = list length × loops) |
-| `autotune.disturb_s` | float | Disturbance duration per round, seconds |
-| `autotune.recover_s` | float | Recovery window per round, seconds |
+| `autotune.schema` | int | Config schema version (currently 2; legacy `plan/loops` auto-migrate) |
+| `autotune.cycles` | int | Cycle count (full plan = cycles × round list) |
+| `autotune.rounds` | array | Round list; each has `name` + `actions`; one AI request per round |
+| `autotune.rounds[].actions` | array | Action list; `kind="step"` (`baseline_sp/target_sp/settle_s/countdown_s/measure_s`) or `kind="disturbance"` (`target_sp/settle_s/countdown_s/disturb_s/recover_s`) |
 | `ui.window_s` | float | Default plot time window, seconds |
 
 ## 3. Workspace Config `settings.toml`
@@ -80,6 +80,7 @@ One JSON object per line. Common fields:
 | `setpoint` | Experiment target |
 | `gains` | `{kp, ki, kd}` (absent for code_edit) |
 | `metrics` | Metrics dictionary (below) |
+| `autotune` | Optional: round/action metadata during auto-tuning (`cycle/round/round_global/action_index/action_total/action_kind`) |
 
 ### 4.1 Step kinds (`manual_step` / `script_step`)
 

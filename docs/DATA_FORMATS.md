@@ -33,10 +33,10 @@
 | `codeagent.timeout_s` | int | 代码修改任务超时秒数（默认 900） |
 | `codeagent.auto_approve` | bool | 是否自动批准工具权限（`--auto`，默认 false；高风险，启用需确认） |
 | `codeagent.approved_adapters` | table | 已信任的自定义适配器：`绝对路径 → 文件 sha256`（改动后重新确认） |
-| `autotune.plan` | string[] | 每循环的测试方案列表（`"step"` / `"disturbance"`） |
-| `autotune.loops` | int | 方案列表循环次数（总轮数 = 列表长度 × 循环次数） |
-| `autotune.disturb_s` | float | 扰动轮施加阻力时长（秒） |
-| `autotune.recover_s` | float | 扰动轮恢复观察时长（秒） |
+| `autotune.schema` | int | 配置结构版本（当前 2；旧 `plan/loops` 会自动迁移） |
+| `autotune.cycles` | int | 测试循环次数（完整方案 = 循环 × 轮次列表） |
+| `autotune.rounds` | array | 轮次列表；每轮 `name` + `actions`，一轮结束后向 AI 请求一次 |
+| `autotune.rounds[].actions` | array | 动作列表；`kind="step"`（`baseline_sp/target_sp/settle_s/countdown_s/measure_s`）或 `kind="disturbance"`（`target_sp/settle_s/countdown_s/disturb_s/recover_s`） |
 | `ui.window_s` | float | 波形时间窗口默认值（秒） |
 
 ## 3. 工作区配置 `settings.toml`
@@ -78,6 +78,7 @@ kd = { min = 0.0, max = 100.0 }
 | `setpoint` | 本次实验目标值 |
 | `gains` | `{kp, ki, kd}`（code_edit 无此字段） |
 | `metrics` | 指标字典（见下） |
+| `autotune` | 可选：自动调参期间的轮次/动作元数据（`cycle/round/round_global/action_index/action_total/action_kind`） |
 
 ### 4.1 阶跃类（`manual_step` / `script_step`）
 
