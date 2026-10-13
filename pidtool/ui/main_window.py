@@ -180,12 +180,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.banner_confirm.hide()
         root.addWidget(self.banner)
 
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
-        root.addWidget(splitter, 1)
+        self.main_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        root.addWidget(self.main_splitter, 1)
 
         self.plots = PlotPanel()
         self.plots.clear_btn.clicked.connect(self._clear_plots)
-        splitter.addWidget(self.plots)
+        self.main_splitter.addWidget(self.plots)
 
         controls = QtWidgets.QWidget()
         row = QtWidgets.QHBoxLayout(controls)
@@ -195,14 +195,46 @@ class MainWindow(QtWidgets.QMainWindow):
         row.addWidget(self._build_metrics_group())
 
         self.bottom_tabs = QtWidgets.QTabWidget()
+        self.bottom_tabs.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Ignored,
+        )
         self.bottom_tabs.addTab(controls, "实验")
         self.bottom_tabs.addTab(self._build_ai_tab(), "AI 调参")
         self.bottom_tabs.addTab(self._build_code_tab(), "代码修改")
         self.bottom_tabs.addTab(self._build_history_tab(), "历史")
-        splitter.addWidget(self.bottom_tabs)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([660, 180])
+        self.main_splitter.addWidget(self.bottom_tabs)
+        self.main_splitter.setStretchFactor(0, 3)
+        self.main_splitter.setStretchFactor(1, 1)
+        self.bottom_tabs.currentChanged.connect(self._on_bottom_tab_changed)
+        self._on_bottom_tab_changed(self.bottom_tabs.currentIndex())
+
+    TAB_PANEL_SIZES = {
+        0: [700, 150],
+        1: [700, 150],
+        2: [560, 300],
+        3: [560, 300],
+    }
+
+    def _on_bottom_tab_changed(self, index: int) -> None:
+        target = self.TAB_PANEL_SIZES.get(index)
+        if not target:
+            return
+        upper, lower = target
+        total = self.main_splitter.height()
+        if total > 0:
+            available = max(1, total - self.main_splitter.handleWidth())
+            lower = min(lower, max(1, available - 100))
+            self.main_splitter.setSizes([max(1, available - lower), lower])
+        else:
+            self.main_splitter.setSizes([upper, lower])
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        QtCore.QTimer.singleShot(0, self._apply_current_tab_sizes)
+
+    def _apply_current_tab_sizes(self) -> None:
+        self._on_bottom_tab_changed(self.bottom_tabs.currentIndex())
 
     def _build_gains_group(self) -> QtWidgets.QGroupBox:
         group = QtWidgets.QGroupBox("PID 参数（在线下发）")

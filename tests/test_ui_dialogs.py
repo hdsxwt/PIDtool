@@ -62,6 +62,29 @@ def test_layout_compaction(qapp, tmp_path):
     window.close()
 
 
+def test_bottom_panel_sizes_follow_tabs(qapp, tmp_path):
+    config = AppConfig(path=tmp_path / "app.toml")
+    window = MainWindow(app_config=config)
+    window.show()
+    qapp.processEvents()
+    qapp.processEvents()
+    assert window.bottom_tabs.currentIndex() == 0
+    assert window.main_splitter.sizes()[1] == 150
+
+    window.bottom_tabs.setCurrentIndex(1)
+    assert window.main_splitter.sizes()[1] == 150
+
+    window.bottom_tabs.setCurrentIndex(2)
+    assert window.main_splitter.sizes()[1] == 300
+
+    window.bottom_tabs.setCurrentIndex(3)
+    assert window.main_splitter.sizes()[1] == 300
+
+    window.bottom_tabs.setCurrentIndex(0)
+    assert window.main_splitter.sizes()[1] == 150
+    window.close()
+
+
 def test_autotune_plan_dialog_roundtrip(qapp):
     dialog = AutotunePlanDialog(
         {"plan": ["step", "disturbance"], "loops": 3, "disturb_s": 2.0, "recover_s": 1.5}
