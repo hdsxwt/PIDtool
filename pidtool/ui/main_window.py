@@ -210,10 +210,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._on_bottom_tab_changed(self.bottom_tabs.currentIndex())
 
     TAB_PANEL_SIZES = {
-        0: [700, 150],
-        1: [700, 150],
-        2: [560, 300],
-        3: [560, 300],
+        0: [700, 220],
+        1: [700, 220],
+        2: [560, 330],
+        3: [560, 330],
     }
 
     def _on_bottom_tab_changed(self, index: int) -> None:

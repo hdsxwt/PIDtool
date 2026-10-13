@@ -69,19 +69,19 @@ def test_bottom_panel_sizes_follow_tabs(qapp, tmp_path):
     qapp.processEvents()
     qapp.processEvents()
     assert window.bottom_tabs.currentIndex() == 0
-    assert window.main_splitter.sizes()[1] == 150
+    assert window.main_splitter.sizes()[1] == 220
 
     window.bottom_tabs.setCurrentIndex(1)
-    assert window.main_splitter.sizes()[1] == 150
+    assert window.main_splitter.sizes()[1] == 220
 
     window.bottom_tabs.setCurrentIndex(2)
-    assert window.main_splitter.sizes()[1] == 300
+    assert window.main_splitter.sizes()[1] == 330
 
     window.bottom_tabs.setCurrentIndex(3)
-    assert window.main_splitter.sizes()[1] == 300
+    assert window.main_splitter.sizes()[1] == 330
 
     window.bottom_tabs.setCurrentIndex(0)
-    assert window.main_splitter.sizes()[1] == 150
+    assert window.main_splitter.sizes()[1] == 220
     window.close()
 
 
