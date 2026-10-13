@@ -7,12 +7,20 @@ from PySide6 import QtCore, QtWidgets
 COLORS = {
     "setpoint": "#9aa0a6",
     "feedback": "#4da3ff",
-    "error": "#ff5c5c",
     "u": "#37c26f",
     "up": "#f2a03d",
     "ui": "#b07cff",
     "ud": "#39c6c0",
 }
+
+CURVE_LABELS = (
+    ("setpoint", "目标"),
+    ("feedback", "反馈"),
+    ("u", "u"),
+    ("up", "up"),
+    ("ui", "ui"),
+    ("ud", "ud"),
+)
 
 MAX_PLOT_POINTS = 4000
 
@@ -21,12 +29,10 @@ class PlotPanel(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.glw = pg.GraphicsLayoutWidget()
-        self.plot_track = self.glw.addPlot(row=0, col=0, title="目标 / 反馈")
-        self.plot_error = self.glw.addPlot(row=1, col=0, title="误差")
-        self.plot_terms = self.glw.addPlot(row=2, col=0, title="输出 / PID 分量")
-        self.plot_error.setXLink(self.plot_track)
+        self.plot_track = self.glw.addPlot(row=0, col=0, title="转速波形")
+        self.plot_terms = self.glw.addPlot(row=1, col=0, title="PWM 输出波形")
         self.plot_terms.setXLink(self.plot_track)
-        for plot in (self.plot_track, self.plot_error, self.plot_terms):
+        for plot in (self.plot_track, self.plot_terms):
             plot.showGrid(x=True, y=True, alpha=0.25)
             plot.setDownsampling(auto=True, mode="peak")
             plot.setClipToView(True)
@@ -40,7 +46,6 @@ class PlotPanel(QtWidgets.QWidget):
                 name="目标",
             ),
             "feedback": self.plot_track.plot(pen=pg.mkPen(COLORS["feedback"], width=1.8), name="反馈"),
-            "error": self.plot_error.plot(pen=pg.mkPen(COLORS["error"], width=1.5)),
             "u": self.plot_terms.plot(pen=pg.mkPen(COLORS["u"], width=1.5), name="u"),
             "up": self.plot_terms.plot(pen=pg.mkPen(COLORS["up"], width=1.1), name="up"),
             "ui": self.plot_terms.plot(pen=pg.mkPen(COLORS["ui"], width=1.1), name="ui"),
@@ -55,11 +60,21 @@ class PlotPanel(QtWidgets.QWidget):
         self.freeze_check = QtWidgets.QCheckBox("冻结显示")
         self.clear_btn = QtWidgets.QPushButton("清除")
 
+        self.curve_checks: dict[str, QtWidgets.QCheckBox] = {}
         bar = QtWidgets.QHBoxLayout()
         bar.addWidget(QtWidgets.QLabel("时间窗口"))
         bar.addWidget(self.window_spin)
         bar.addWidget(self.freeze_check)
         bar.addWidget(self.clear_btn)
+        bar.addWidget(QtWidgets.QLabel("| 显示"))
+        for key, label in CURVE_LABELS:
+            check = QtWidgets.QCheckBox(label)
+            check.setChecked(True)
+            check.toggled.connect(
+                lambda visible, curve_key=key: self.curves[curve_key].setVisible(visible)
+            )
+            bar.addWidget(check)
+            self.curve_checks[key] = check
         bar.addStretch(1)
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -79,7 +94,7 @@ class PlotPanel(QtWidgets.QWidget):
     def add_marker(self, t: float, label: str) -> None:
         pen = pg.mkPen("#ffd166", width=1.2, style=QtCore.Qt.PenStyle.DashDotLine)
         items: list[tuple[pg.PlotItem, pg.InfiniteLine]] = []
-        for plot in (self.plot_track, self.plot_error, self.plot_terms):
+        for plot in (self.plot_track, self.plot_terms):
             line = pg.InfiniteLine(
                 angle=90,
                 movable=False,
@@ -122,10 +137,5 @@ class PlotPanel(QtWidgets.QWidget):
         x = t - t_ref
         step = max(1, t.size // MAX_PLOT_POINTS)
         xs = x[::step]
-        self.curves["setpoint"].setData(xs, data["setpoint"][idx::step])
-        self.curves["feedback"].setData(xs, data["feedback"][idx::step])
-        self.curves["error"].setData(xs, (data["setpoint"][idx:] - data["feedback"][idx:])[::step])
-        self.curves["u"].setData(xs, data["u"][idx::step])
-        self.curves["up"].setData(xs, data["up"][idx::step])
-        self.curves["ui"].setData(xs, data["ui"][idx::step])
-        self.curves["ud"].setData(xs, data["ud"][idx::step])
+        for key in self.curves:
+            self.curves[key].setData(xs, data[key][idx::step])
