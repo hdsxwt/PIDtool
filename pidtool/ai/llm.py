@@ -41,12 +41,12 @@ class DeepSeekTuner:
         self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
         self.model = model
 
-    def suggest(self, history: list[dict], limits: dict, setpoint: float) -> Suggestion:
+    def suggest(self, history: list[dict], limits: dict) -> Suggestion:
         response = self._client.chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": build_user_prompt(history, limits, setpoint)},
+                {"role": "user", "content": build_user_prompt(history, limits)},
             ],
             response_format={"type": "json_object"},
             temperature=0.2,

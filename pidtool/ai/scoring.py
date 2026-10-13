@@ -13,6 +13,17 @@ def score_metrics(
     return _score_step(metrics)
 
 
+def aggregate_round_score(scores: list[float]) -> float:
+    values = [float(value) for value in scores]
+    if not values:
+        return float("inf")
+    if any(value == float("inf") for value in values):
+        return float("inf")
+    mean = sum(values) / len(values)
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    return mean + variance
+
+
 def _score_step(metrics: StepMetrics | None) -> float:
     if metrics is None:
         return float("inf")

@@ -4,10 +4,11 @@ import threading
 from typing import Callable
 
 from pidtool.ai.llm import Suggestion
-from pidtool.ai.scoring import score_metrics
+from pidtool.ai.plan import normalize_rounds
+from pidtool.ai.scoring import aggregate_round_score, score_metrics
 from pidtool.core.metrics import DisturbanceMetrics, StepMetrics
 
-SuggestFn = Callable[[list[dict], dict, float], Suggestion]
+SuggestFn = Callable[[list[dict], dict], Suggestion]
 
 VALID_KINDS = ("step", "disturbance")
 
@@ -25,14 +26,14 @@ class AutoTuner:
         self._result: object | None = None
         self._suggest: SuggestFn | None = None
         self._limits: dict = {}
-        self._setpoint = 1.0
-        self._sequence: list[str] = ["step"]
+        self._rounds: list[dict] = []
+        self._cycles = 1
         self._total = 1
-        self._disturb_s = 5.0
-        self._recover_s = 4.0
+        self._round_index = 0
+        self._action_index = 0
+        self._round_buffer: list[dict] = []
         self._history: list[dict] = []
         self._best: dict | None = None
-        self._iteration = 0
         self._worse_streak = 0
         self._osc_streak = 0
         self._current = {"kp": 0.0, "ki": 0.0, "kd": 0.0}
@@ -50,39 +51,36 @@ class AutoTuner:
         kp: float,
         ki: float,
         kd: float,
-        plan: list[str],
-        loops: int,
+        rounds: list[dict],
+        cycles: int,
         suggest: SuggestFn,
         limits: dict,
-        setpoint: float,
-        disturb_s: float = 5.0,
-        recover_s: float = 4.0,
     ) -> None:
         if self._active:
             raise RuntimeError("自动调参已在运行")
-        kinds = [str(kind).lower() for kind in plan]
-        kinds = [kind for kind in kinds if kind in VALID_KINDS]
-        if not kinds:
-            kinds = ["step"]
-        loops = max(1, int(loops))
-        self._active = True
+        self._rounds = normalize_rounds(rounds)
+        self._cycles = max(1, int(cycles))
+        self._total = len(self._rounds) * self._cycles
         self._suggest = suggest
         self._limits = limits
-        self._setpoint = float(setpoint)
-        self._sequence = kinds * loops
-        self._total = len(self._sequence)
-        self._disturb_s = float(disturb_s)
-        self._recover_s = float(recover_s)
+        self._active = True
         self._history = []
         self._best = None
-        self._iteration = 0
+        self._round_index = 0
+        self._action_index = 0
+        self._round_buffer = []
         self._worse_streak = 0
         self._osc_streak = 0
         self._result = None
         self._current = {"kp": float(kp), "ki": float(ki), "kd": float(kd)}
         self._on_event(
             "status",
-            {"text": f"自动调参开始：目标设定值 {setpoint:g}，共 {self._total} 轮"},
+            {
+                "text": (
+                    f"自动调参开始：每循环 {len(self._rounds)} 轮 × {self._cycles} 循环"
+                    f" = 共 {self._total} 轮（每轮一次 AI 评估）"
+                )
+            },
         )
         self._emit_apply(self._current)
         self._on_event("run_experiment", self._experiment_payload())
@@ -101,18 +99,12 @@ class AutoTuner:
     ) -> None:
         if not self._active:
             return
-        kind = kind if kind in VALID_KINDS else "step"
-        score = score_metrics(kind, metrics, setpoint)
-        self._iteration += 1
-        entry: dict = {
-            "iteration": self._iteration,
-            "kind": kind,
-            "setpoint": float(setpoint),
-            "kp": float(gains["kp"]),
-            "ki": float(gains["ki"]),
-            "kd": float(gains["kd"]),
-            "score": score,
-        }
+        action = self._current_action() or {}
+        action_kind = str(action.get("kind", kind))
+        kind = action_kind if action_kind in VALID_KINDS else "step"
+        target = float(action.get("target_sp", setpoint))
+        score = score_metrics(kind, metrics, target)
+        entry: dict = {"kind": kind, "setpoint": target, "score": score}
         if metrics is not None:
             if kind == "disturbance":
                 entry.update(
@@ -138,26 +130,56 @@ class AutoTuner:
                 )
         if waveform:
             entry["waveform"] = waveform
-        improved = self._best is None or score < float(self._best["score"]) - 1e-9
-        if improved:
-            self._best = {"score": score, "gains": dict(gains), "iteration": self._iteration}
-            entry["best"] = True
-        self._history.append(entry)
-        self._on_event("iteration", dict(entry))
-
-        self._worse_streak = 0 if improved else self._worse_streak + 1
-        if metrics is not None and getattr(metrics, "oscillating", False):
-            self._osc_streak += 1
-        else:
-            self._osc_streak = 0
-
-        if metrics is None or score == float("inf"):
+        self._round_buffer.append(entry)
+        if score == float("inf"):
             self._graceful_finish("实验数据无效，停止调参")
             return
+
+        actions = self._current_actions()
+        if self._action_index + 1 < len(actions):
+            self._action_index += 1
+            self._on_event("run_experiment", self._experiment_payload())
+            return
+
+        completed_meta = self._round_meta()
+        self._round_index += 1
+        scores = [float(item["score"]) for item in self._round_buffer]
+        round_score = aggregate_round_score(scores)
+        round_entry: dict = {
+            "iteration": self._round_index,
+            "cycle": completed_meta["cycle"],
+            "round": completed_meta["round"],
+            "round_global": completed_meta["round_global"],
+            "round_total": self._total,
+            "score": round_score,
+            "kp": float(gains["kp"]),
+            "ki": float(gains["ki"]),
+            "kd": float(gains["kd"]),
+            "actions": [dict(item) for item in self._round_buffer],
+        }
+        improved = round_score != float("inf") and (
+            self._best is None or round_score < float(self._best["score"]) - 1e-9
+        )
+        if improved:
+            self._best = {
+                "score": round_score,
+                "gains": dict(gains),
+                "iteration": self._round_index,
+            }
+            round_entry["best"] = True
+        self._history.append(round_entry)
+        self._on_event("iteration", round_entry)
+
+        oscillating = any(bool(item.get("oscillating")) for item in self._round_buffer)
+        self._worse_streak = 0 if improved else self._worse_streak + 1
+        self._osc_streak = self._osc_streak + 1 if oscillating else 0
+        self._round_buffer = []
+        self._action_index = 0
+
         if self._osc_streak >= 2:
             self._graceful_finish("系统连续振荡，提前停止")
             return
-        if self._iteration >= self._total:
+        if self._round_index >= self._total:
             self._graceful_finish("完成全部轮次")
             return
         if self._worse_streak >= 3:
@@ -189,14 +211,40 @@ class AutoTuner:
         self._emit_apply(gains)
         self._on_event("run_experiment", self._experiment_payload())
 
-    def _experiment_payload(self) -> dict:
-        index = min(self._iteration, self._total - 1)
-        kind = self._sequence[index] if 0 <= index < len(self._sequence) else "step"
+    def _round_meta(self) -> dict:
+        rounds_count = max(1, len(self._rounds))
         return {
-            "kind": kind,
-            "disturb_s": self._disturb_s,
-            "recover_s": self._recover_s,
+            "cycle": self._round_index // rounds_count + 1,
+            "cycles": self._cycles,
+            "round": self._round_index % rounds_count + 1,
+            "round_global": self._round_index + 1,
+            "round_total": self._total,
+            "rounds_per_cycle": rounds_count,
         }
+
+    def _current_actions(self) -> list[dict]:
+        if not self._rounds:
+            return []
+        return self._rounds[self._round_index % len(self._rounds)]["actions"]
+
+    def _current_action(self) -> dict | None:
+        actions = self._current_actions()
+        if 0 <= self._action_index < len(actions):
+            return actions[self._action_index]
+        return None
+
+    def _experiment_payload(self) -> dict:
+        payload = self._round_meta()
+        actions = self._current_actions()
+        action = self._current_action() or (actions[0] if actions else {})
+        payload.update(
+            {
+                "action_index": self._action_index + 1,
+                "action_total": len(actions),
+                "action": dict(action),
+            }
+        )
+        return payload
 
     def _request(self) -> None:
         if self._suggest is None:
@@ -205,7 +253,7 @@ class AutoTuner:
 
         def task() -> None:
             try:
-                result: object = self._suggest(list(self._history), self._limits, self._setpoint)
+                result: object = self._suggest(list(self._history), self._limits)
             except Exception as exc:
                 result = exc
             self._result = result
@@ -226,12 +274,28 @@ class AutoTuner:
         return max(low, min(high, value))
 
     def _emit_apply(self, gains: dict) -> None:
-        index = min(self._iteration, self._total - 1) if self._sequence else 0
-        kind = self._sequence[index] if self._sequence else "step"
+        restore = self._round_index >= self._total
         payload = dict(gains)
-        payload["round"] = self._iteration + 1
-        payload["total"] = self._total
-        payload["kind"] = kind
+        payload["restore"] = bool(restore)
+        if restore:
+            rounds_count = max(1, len(self._rounds))
+            payload.update(
+                {
+                    "cycle": self._cycles,
+                    "cycles": self._cycles,
+                    "round": rounds_count,
+                    "round_global": self._total,
+                    "round_total": self._total,
+                    "rounds_per_cycle": rounds_count,
+                    "action_kinds": [],
+                    "action_total": 0,
+                }
+            )
+        else:
+            payload.update(self._round_meta())
+            actions = self._current_actions()
+            payload["action_kinds"] = [str(action.get("kind", "step")) for action in actions]
+            payload["action_total"] = len(actions)
         self._on_event("apply_gains", payload)
 
     def _graceful_finish(self, reason: str) -> None:
@@ -246,14 +310,17 @@ class AutoTuner:
                 self._on_event("status", {"text": "恢复最优参数"})
                 self._current = dict(best_gains)
                 self._emit_apply(best_gains)
+        rounds_done = self._round_index
         self._active = False
         self._worker = None
+        self._round_buffer = []
+        self._action_index = 0
         self._on_event("pause_motor", {})
         self._on_event(
             "finished",
             {
                 "reason": reason,
-                "iterations": self._iteration,
+                "rounds": rounds_done,
                 "best_score": None if best is None else float(best["score"]),
                 "best_gains": None if best is None else dict(best["gains"]),
             },

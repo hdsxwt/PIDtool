@@ -17,10 +17,31 @@ DEFAULT_LLM_MODEL = "deepseek-flash"
 LEGACY_LLM_MODELS = ("", "deepseek-chat")
 
 DEFAULT_AUTOTUNE: dict[str, Any] = {
-    "plan": ["step"] * 8,
-    "loops": 1,
-    "disturb_s": 5.0,
-    "recover_s": 4.0,
+    "schema": 2,
+    "cycles": 2,
+    "rounds": [
+        {
+            "name": "轮次 1",
+            "actions": [
+                {
+                    "kind": "step",
+                    "baseline_sp": 0.0,
+                    "target_sp": 300.0,
+                    "settle_s": 2.0,
+                    "countdown_s": 3.0,
+                    "measure_s": 3.0,
+                },
+                {
+                    "kind": "step",
+                    "baseline_sp": 300.0,
+                    "target_sp": 600.0,
+                    "settle_s": 2.0,
+                    "countdown_s": 3.0,
+                    "measure_s": 3.0,
+                },
+            ],
+        }
+    ],
 }
 
 DEFAULT_APP_CONFIG: dict[str, Any] = {
@@ -56,6 +77,50 @@ def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _migrate_autotune(autotune: dict[str, Any]) -> bool:
+    if not isinstance(autotune, dict):
+        return False
+    if "plan" not in autotune and "loops" not in autotune:
+        return False
+    plan = [str(kind) for kind in (autotune.get("plan") or ["step"])]
+    try:
+        loops = max(1, int(autotune.get("loops", 1)))
+    except (TypeError, ValueError):
+        loops = 1
+    try:
+        disturb_s = float(autotune.get("disturb_s", 5.0))
+    except (TypeError, ValueError):
+        disturb_s = 5.0
+    try:
+        recover_s = float(autotune.get("recover_s", 4.0))
+    except (TypeError, ValueError):
+        recover_s = 4.0
+    rounds: list[dict[str, Any]] = []
+    for index, kind in enumerate(plan):
+        if kind == "disturbance":
+            action = {
+                "kind": "disturbance",
+                "target_sp": 2.0,
+                "settle_s": 2.0,
+                "countdown_s": 3.0,
+                "disturb_s": disturb_s,
+                "recover_s": recover_s,
+            }
+        else:
+            action = {
+                "kind": "step",
+                "baseline_sp": 0.0,
+                "target_sp": 2.0,
+                "settle_s": 2.0,
+                "countdown_s": 3.0,
+                "measure_s": 4.0,
+            }
+        rounds.append({"name": f"轮次 {index + 1}", "actions": [action]})
+    autotune.clear()
+    autotune.update({"schema": 2, "cycles": loops, "rounds": rounds})
+    return True
+
+
 class AppConfig:
     def __init__(self, path: Path = APP_CONFIG_PATH) -> None:
         self.path = Path(path)
@@ -77,6 +142,9 @@ class AppConfig:
         raw_key = str(llm.get("api_key", ""))
         if raw_key and not raw_key.startswith(DPAPI_PREFIX):
             llm["api_key"] = protect(raw_key)
+            self.save()
+        autotune = self.data.setdefault("autotune", {})
+        if _migrate_autotune(autotune):
             self.save()
 
     def save(self) -> None:
