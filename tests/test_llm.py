@@ -59,6 +59,33 @@ def test_build_user_prompt_contains_history():
     assert "降采样波形" not in text
 
 
+def test_build_user_prompt_renders_disturbance_round():
+    history = [
+        {
+            "iteration": 2,
+            "kind": "disturbance",
+            "kp": 5.0,
+            "ki": 40.0,
+            "kd": 0.1,
+            "max_deviation": 0.32,
+            "recovery_time": 1.35,
+            "residual_error": 0.0002,
+            "oscillating": False,
+            "score": 23.1,
+        }
+    ]
+    limits = {
+        "kp": {"min": 0.0, "max": 500.0},
+        "ki": {"min": 0.0, "max": 5000.0},
+        "kd": {"min": 0.0, "max": 100.0},
+    }
+    text = build_user_prompt(history, limits, 2.0)
+    assert "第2轮（扰动）" in text
+    assert "最大偏差=0.32" in text
+    assert "恢复=1.3500s" in text
+    assert "残余偏差=+0.00020" in text
+
+
 def test_build_user_prompt_includes_waveform():
     history = [
         {

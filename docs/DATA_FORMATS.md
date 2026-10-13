@@ -32,6 +32,10 @@
 | `codeagent.agent_name` | string | 可选的受限 agent 名称 |
 | `codeagent.timeout_s` | int | 代码修改任务超时秒数（默认 900） |
 | `codeagent.auto_approve` | bool | 是否传 `--auto`（默认 true，无头模式必需） |
+| `autotune.plan` | string[] | 每循环的测试方案列表（`"step"` / `"disturbance"`） |
+| `autotune.loops` | int | 方案列表循环次数（总轮数 = 列表长度 × 循环次数） |
+| `autotune.disturb_s` | float | 扰动轮施加阻力时长（秒） |
+| `autotune.recover_s` | float | 扰动轮恢复观察时长（秒） |
 | `ui.window_s` | float | 波形时间窗口默认值（秒） |
 
 ## 3. 工作区配置 `settings.toml`

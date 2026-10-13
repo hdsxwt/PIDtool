@@ -79,9 +79,12 @@ Four tabs at the bottom:
 
 ### AI tuning flow and safety
 
-Each round: apply gains -> step experiment (baseline then step, so every round
-measures a clean step) -> extract metrics -> score -> DeepSeek proposes the next
-gains -> clamp. Safety: workspace limits, per-round recording, **restore of the
+Each round: apply gains -> run the round's scheme (step rounds return to a
+baseline first; disturbance rounds settle at the target and then prompt you to
+apply resistance) -> extract metrics -> unified score -> DeepSeek proposes the
+next gains -> clamp. Configure the per-loop scheme list (step/disturbance) and
+loop count in the "调参方案…" dialog; total rounds = list length × loops.
+Disturbance rounds ask you to apply/stop resistance via the banner. Safety: workspace limits, per-round recording, **restore of the
 best gains at the end**, early stop on oscillation or repeated degradation,
 abort anytime. The API key is stored only in the global config
 (`%APPDATA%/PIDtool/app.toml`).

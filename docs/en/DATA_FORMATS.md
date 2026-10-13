@@ -34,6 +34,10 @@ the firmware repository.
 | `codeagent.agent_name` | string | Optional restricted agent name |
 | `codeagent.timeout_s` | int | Code-edit task timeout, seconds (default 900) |
 | `codeagent.auto_approve` | bool | Pass `--auto` (default true; required headless) |
+| `autotune.plan` | string[] | Test scheme list per loop (`"step"` / `"disturbance"`) |
+| `autotune.loops` | int | Loop count (total rounds = list length × loops) |
+| `autotune.disturb_s` | float | Disturbance duration per round, seconds |
+| `autotune.recover_s` | float | Recovery window per round, seconds |
 | `ui.window_s` | float | Default plot time window, seconds |
 
 ## 3. Workspace Config `settings.toml`

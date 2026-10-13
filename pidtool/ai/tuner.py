@@ -5,9 +5,11 @@ from typing import Callable
 
 from pidtool.ai.llm import Suggestion
 from pidtool.ai.scoring import score_metrics
-from pidtool.core.metrics import StepMetrics
+from pidtool.core.metrics import DisturbanceMetrics, StepMetrics
 
 SuggestFn = Callable[[list[dict], dict, float], Suggestion]
+
+VALID_KINDS = ("step", "disturbance")
 
 
 class AutoTuner:
@@ -24,7 +26,10 @@ class AutoTuner:
         self._suggest: SuggestFn | None = None
         self._limits: dict = {}
         self._setpoint = 1.0
-        self._max_iters = 8
+        self._sequence: list[str] = ["step"]
+        self._total = 1
+        self._disturb_s = 5.0
+        self._recover_s = 4.0
         self._history: list[dict] = []
         self._best: dict | None = None
         self._iteration = 0
@@ -45,18 +50,29 @@ class AutoTuner:
         kp: float,
         ki: float,
         kd: float,
-        max_iters: int,
+        plan: list[str],
+        loops: int,
         suggest: SuggestFn,
         limits: dict,
         setpoint: float,
+        disturb_s: float = 5.0,
+        recover_s: float = 4.0,
     ) -> None:
         if self._active:
             raise RuntimeError("自动调参已在运行")
+        kinds = [str(kind).lower() for kind in plan]
+        kinds = [kind for kind in kinds if kind in VALID_KINDS]
+        if not kinds:
+            kinds = ["step"]
+        loops = max(1, int(loops))
         self._active = True
         self._suggest = suggest
         self._limits = limits
         self._setpoint = float(setpoint)
-        self._max_iters = max(1, int(max_iters))
+        self._sequence = kinds * loops
+        self._total = len(self._sequence)
+        self._disturb_s = float(disturb_s)
+        self._recover_s = float(recover_s)
         self._history = []
         self._best = None
         self._iteration = 0
@@ -66,10 +82,10 @@ class AutoTuner:
         self._current = {"kp": float(kp), "ki": float(ki), "kd": float(kd)}
         self._on_event(
             "status",
-            {"text": f"自动调参开始：目标设定值 {setpoint:g}，最大 {self._max_iters} 轮"},
+            {"text": f"自动调参开始：目标设定值 {setpoint:g}，共 {self._total} 轮"},
         )
         self._emit_apply(self._current)
-        self._on_event("run_experiment", {})
+        self._on_event("run_experiment", self._experiment_payload())
 
     def abort(self) -> None:
         if self._active:
@@ -77,17 +93,20 @@ class AutoTuner:
 
     def on_trial(
         self,
-        metrics: StepMetrics | None,
+        metrics: StepMetrics | DisturbanceMetrics | None,
         gains: dict,
         setpoint: float,
+        kind: str = "step",
         waveform: dict | None = None,
     ) -> None:
         if not self._active:
             return
-        score = score_metrics(metrics)
+        kind = kind if kind in VALID_KINDS else "step"
+        score = score_metrics(kind, metrics, setpoint)
         self._iteration += 1
         entry: dict = {
             "iteration": self._iteration,
+            "kind": kind,
             "setpoint": float(setpoint),
             "kp": float(gains["kp"]),
             "ki": float(gains["ki"]),
@@ -95,16 +114,28 @@ class AutoTuner:
             "score": score,
         }
         if metrics is not None:
-            entry.update(
-                {
-                    "overshoot_pct": metrics.overshoot_pct,
-                    "rise_time": metrics.rise_time,
-                    "settling_time": metrics.settling_time,
-                    "steady_error": metrics.steady_error,
-                    "tail_ripple": metrics.tail_ripple,
-                    "oscillating": metrics.oscillating,
-                }
-            )
+            if kind == "disturbance":
+                entry.update(
+                    {
+                        "max_deviation": metrics.max_deviation,
+                        "max_deviation_time": metrics.max_deviation_time,
+                        "recovery_time": metrics.recovery_time,
+                        "residual_error": metrics.residual_error,
+                        "tail_ripple": metrics.tail_ripple,
+                        "oscillating": metrics.oscillating,
+                    }
+                )
+            else:
+                entry.update(
+                    {
+                        "overshoot_pct": metrics.overshoot_pct,
+                        "rise_time": metrics.rise_time,
+                        "settling_time": metrics.settling_time,
+                        "steady_error": metrics.steady_error,
+                        "tail_ripple": metrics.tail_ripple,
+                        "oscillating": metrics.oscillating,
+                    }
+                )
         if waveform:
             entry["waveform"] = waveform
         improved = self._best is None or score < float(self._best["score"]) - 1e-9
@@ -115,7 +146,7 @@ class AutoTuner:
         self._on_event("iteration", dict(entry))
 
         self._worse_streak = 0 if improved else self._worse_streak + 1
-        if metrics is not None and metrics.oscillating:
+        if metrics is not None and getattr(metrics, "oscillating", False):
             self._osc_streak += 1
         else:
             self._osc_streak = 0
@@ -126,7 +157,7 @@ class AutoTuner:
         if self._osc_streak >= 2:
             self._graceful_finish("系统连续振荡，提前停止")
             return
-        if self._iteration >= self._max_iters:
+        if self._iteration >= self._total:
             self._graceful_finish("完成全部轮次")
             return
         if self._worse_streak >= 3:
@@ -155,7 +186,16 @@ class AutoTuner:
             self._on_event("status", {"text": f"AI 建议: {suggestion.reasoning}"})
         self._current = gains
         self._emit_apply(gains)
-        self._on_event("run_experiment", {})
+        self._on_event("run_experiment", self._experiment_payload())
+
+    def _experiment_payload(self) -> dict:
+        index = min(self._iteration, self._total - 1)
+        kind = self._sequence[index] if 0 <= index < len(self._sequence) else "step"
+        return {
+            "kind": kind,
+            "disturb_s": self._disturb_s,
+            "recover_s": self._recover_s,
+        }
 
     def _request(self) -> None:
         assert self._suggest is not None

@@ -42,7 +42,12 @@ def test_autotune_ui_flow(qapp, tmp_path):
     window._ai_settle_s = 0.2
     window._ai_countdown_s = 0.2
     window.ai_measure_spin.setValue(0.6)
-    window.ai_iters_spin.setValue(2)
+    window.app_config.data["autotune"] = {
+        "plan": ["step", "step"],
+        "loops": 1,
+        "disturb_s": 1.0,
+        "recover_s": 1.0,
+    }
     window.ai_target_spin.setValue(2.0)
     window.ai_wave_check.setChecked(True)
     window.app_config.data["llm"]["api_key"] = "test-key"
@@ -78,6 +83,54 @@ def test_autotune_ui_flow(qapp, tmp_path):
     assert trials[0]["gains"]["kp"] == 4.0
     assert trials[1]["gains"]["kp"] == 5.0
     assert window.trials_table.rowCount() == 2
+
+    window._disconnect()
+    window.close()
+
+
+def test_autotune_mixed_plan_ui(qapp, tmp_path):
+    config = AppConfig(path=tmp_path / "app.toml")
+    window = MainWindow(app_config=config)
+    window._activate_workspace(tmp_path)
+    window.link_combo.setCurrentIndex(window.link_combo.findData("mock"))
+    window._connect()
+    assert _wait_until(qapp, lambda: window.link.buffer.total >= 60, timeout=10.0)
+
+    window._ai_settle_s = 0.2
+    window._ai_countdown_s = 0.2
+    window.ai_measure_spin.setValue(0.5)
+    window.app_config.data["autotune"] = {
+        "plan": ["step", "disturbance"],
+        "loops": 1,
+        "disturb_s": 0.4,
+        "recover_s": 0.5,
+    }
+    window.app_config.data["llm"]["api_key"] = "test-key"
+
+    def fake_suggest(history, limits, setpoint):
+        return Suggestion(5.0, 40.0, 0.1, "fake")
+
+    window._make_suggest = lambda: fake_suggest
+    window._start_autotune()
+    assert window.tuner.active
+
+    deadline = time.time() + 40.0
+    while window.tuner.active and time.time() < deadline:
+        qapp.processEvents()
+        if not window.banner_confirm.isHidden():
+            window.runner.confirm()
+        time.sleep(0.01)
+    assert not window.tuner.active
+
+    trials = window.workspace.read_trials()
+    kinds = [t["kind"] for t in trials]
+    assert "script_step" in kinds
+    assert "script_disturbance" in kinds
+    plan_column = [
+        window.ai_log.item(row, 1).text() for row in range(window.ai_log.rowCount())
+    ]
+    assert plan_column == ["阶跃", "扰动"]
+    assert window.ai_status.text().startswith("完成全部轮次")
 
     window._disconnect()
     window.close()

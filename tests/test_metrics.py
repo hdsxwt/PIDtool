@@ -139,3 +139,14 @@ def test_disturbance_invalid_window():
     t = np.arange(0.0, 4.0, 0.001)
     y = np.ones_like(t)
     assert analyze_disturbance(t, y, 1.0, 3.0, 2.0, band=0.02) is None
+
+
+def test_disturbance_oscillation_flagged():
+    t = np.arange(0.0, 6.0, 0.001)
+    y = np.ones_like(t)
+    after = t >= 3.0
+    y[after] = 1.0 + 0.2 * np.sin(2.0 * np.pi * 5.0 * (t[after] - 3.0) + 0.3)
+    m = analyze_disturbance(t, y, 1.0, 2.0, 3.0, band=0.02)
+    assert m is not None
+    assert m.oscillating
+    assert abs(m.tail_ripple - 0.2) < 0.03

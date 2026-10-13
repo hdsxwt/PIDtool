@@ -4,7 +4,7 @@ import time
 
 from pidtool.ai.llm import Suggestion
 from pidtool.ai.tuner import AutoTuner
-from pidtool.core.metrics import StepMetrics
+from pidtool.core.metrics import DisturbanceMetrics, StepMetrics
 
 LIMITS = {
     "kp": {"min": 0.0, "max": 100.0},
@@ -26,6 +26,18 @@ def make_metrics(overshoot=5.0, settle=0.5, rise=0.1, sse=0.0, osc=False) -> Ste
     )
 
 
+def make_disturbance(deviation=0.3, recovery=1.0, residual=0.001, osc=False) -> DisturbanceMetrics:
+    return DisturbanceMetrics(
+        max_deviation=deviation,
+        max_deviation_time=100.0,
+        recovery_time=recovery,
+        residual_error=residual,
+        tail_ripple=0.01,
+        oscillating=osc,
+        samples=500,
+    )
+
+
 def kinds(events):
     return [kind for kind, _ in events]
 
@@ -40,7 +52,8 @@ def test_iteration_flow_and_best_restore():
         4.0,
         60.0,
         0.05,
-        max_iters=3,
+        plan=["step"] * 3,
+        loops=1,
         suggest=lambda h, l, sp: next(suggestions),
         limits=LIMITS,
         setpoint=2.0,
@@ -80,7 +93,8 @@ def test_suggestion_clamped_to_limits():
         1.0,
         1.0,
         0.0,
-        max_iters=2,
+        plan=["step"] * 2,
+        loops=1,
         suggest=lambda h, l, sp: Suggestion(9999.0, -5.0, 1e9, ""),
         limits=LIMITS,
         setpoint=1.0,
@@ -98,7 +112,8 @@ def test_stops_after_two_oscillating_trials():
         4.0,
         60.0,
         0.05,
-        max_iters=10,
+        plan=["step"] * 10,
+        loops=1,
         suggest=lambda h, l, sp: Suggestion(5.0, 50.0, 0.1, ""),
         limits=LIMITS,
         setpoint=2.0,
@@ -117,7 +132,8 @@ def test_three_worse_trials_stop_early():
         4.0,
         60.0,
         0.05,
-        max_iters=10,
+        plan=["step"] * 10,
+        loops=1,
         suggest=lambda h, l, sp: Suggestion(5.0, 50.0, 0.1, ""),
         limits=LIMITS,
         setpoint=2.0,
@@ -133,7 +149,7 @@ def test_three_worse_trials_stop_early():
 def test_abort_finishes():
     events: list[tuple[str, dict]] = []
     tuner = AutoTuner(lambda k, d: events.append((k, d)), async_mode=False)
-    tuner.start(1.0, 1.0, 0.0, max_iters=5, suggest=lambda h, l, sp: None, limits=LIMITS, setpoint=1.0)
+    tuner.start(1.0, 1.0, 0.0, plan=["step"] * 5, loops=1, suggest=lambda h, l, sp: None, limits=LIMITS, setpoint=1.0)
     tuner.abort()
     assert not tuner.active
     assert events[-1][0] == "finished"
@@ -148,7 +164,7 @@ def test_llm_error_finishes():
     def boom(history, limits, setpoint):
         raise RuntimeError("network down")
 
-    tuner.start(4.0, 60.0, 0.05, max_iters=5, suggest=boom, limits=LIMITS, setpoint=2.0)
+    tuner.start(4.0, 60.0, 0.05, plan=["step"] * 5, loops=1, suggest=boom, limits=LIMITS, setpoint=2.0)
     tuner.on_trial(make_metrics(), {"kp": 4.0, "ki": 60.0, "kd": 0.05}, 2.0)
     tuner.tick()
     assert not tuner.active
@@ -163,7 +179,7 @@ def test_async_request():
         return Suggestion(5.0, 40.0, 0.1, "")
 
     tuner = AutoTuner(lambda k, d: events.append((k, d)), async_mode=True)
-    tuner.start(4.0, 60.0, 0.05, max_iters=5, suggest=slow_suggest, limits=LIMITS, setpoint=2.0)
+    tuner.start(4.0, 60.0, 0.05, plan=["step"] * 5, loops=1, suggest=slow_suggest, limits=LIMITS, setpoint=2.0)
     tuner.on_trial(make_metrics(), {"kp": 4.0, "ki": 60.0, "kd": 0.05}, 2.0)
     deadline = time.time() + 3.0
     while time.time() < deadline and kinds(events).count("run_experiment") < 2:
@@ -183,7 +199,7 @@ def test_waveform_recorded_and_sent():
         return Suggestion(5.0, 40.0, 0.1, "")
 
     tuner = AutoTuner(lambda k, d: events.append((k, d)), async_mode=False)
-    tuner.start(4.0, 60.0, 0.05, max_iters=5, suggest=suggest, limits=LIMITS, setpoint=2.0)
+    tuner.start(4.0, 60.0, 0.05, plan=["step"] * 5, loops=1, suggest=suggest, limits=LIMITS, setpoint=2.0)
     waveform = {
         "t": [0.0, 0.01],
         "setpoint": [2.0, 2.0],
@@ -202,3 +218,75 @@ def test_waveform_recorded_and_sent():
     assert captured["history"][0]["waveform"]["t"] == [0.0, 0.01]
     assert "waveform" not in captured["history"][1]
     tuner.abort()
+
+
+def test_mixed_plan_sequence_and_finish():
+    events: list[tuple[str, dict]] = []
+    suggestions = iter(
+        [
+            Suggestion(5.0, 40.0, 0.1, "a"),
+            Suggestion(4.0, 60.0, 0.1, "b"),
+            Suggestion(3.0, 80.0, 0.2, "c"),
+        ]
+    )
+    tuner = AutoTuner(lambda k, d: events.append((k, d)), async_mode=False)
+    tuner.start(
+        4.0,
+        60.0,
+        0.05,
+        plan=["step", "disturbance"],
+        loops=2,
+        suggest=lambda h, l, sp: next(suggestions),
+        limits=LIMITS,
+        setpoint=2.0,
+        disturb_s=3.0,
+        recover_s=2.5,
+    )
+    assert [d["kind"] for k, d in events if k == "run_experiment"] == ["step"]
+
+    tuner.on_trial(make_metrics(), {"kp": 4.0, "ki": 60.0, "kd": 0.05}, 2.0, kind="step")
+    tuner.tick()
+    payloads = [d for k, d in events if k == "run_experiment"]
+    assert [d["kind"] for d in payloads] == ["step", "disturbance"]
+    assert payloads[-1]["disturb_s"] == 3.0
+    assert payloads[-1]["recover_s"] == 2.5
+
+    tuner.on_trial(
+        make_disturbance(), {"kp": 5.0, "ki": 40.0, "kd": 0.1}, 2.0, kind="disturbance"
+    )
+    tuner.tick()
+    assert [d["kind"] for k, d in events if k == "run_experiment"] == [
+        "step",
+        "disturbance",
+        "step",
+    ]
+
+    tuner.on_trial(
+        make_metrics(overshoot=2.0), {"kp": 4.0, "ki": 60.0, "kd": 0.1}, 2.0, kind="step"
+    )
+    tuner.tick()
+    tuner.on_trial(
+        make_disturbance(deviation=0.2, recovery=0.5),
+        {"kp": 3.0, "ki": 80.0, "kd": 0.2},
+        2.0,
+        kind="disturbance",
+    )
+    assert not tuner.active
+    finished = events[-1][1]
+    assert finished["reason"] == "完成全部轮次"
+    assert finished["iterations"] == 4
+    assert finished["best_gains"] is not None
+    iterations = [d for k, d in events if k == "iteration"]
+    assert [d["kind"] for d in iterations] == ["step", "disturbance", "step", "disturbance"]
+    assert "max_deviation" in iterations[1]
+    assert "overshoot_pct" in iterations[2]
+
+
+def test_unified_scoring_is_comparable():
+    from pidtool.ai.scoring import score_metrics
+
+    step_score = score_metrics("step", make_metrics(overshoot=10.0, settle=0.5, rise=0.1), 2.0)
+    dist_score = score_metrics("disturbance", make_disturbance(deviation=0.2, recovery=0.5), 2.0)
+    assert 0.0 < step_score < 100.0
+    assert 0.0 < dist_score < 100.0
+    assert score_metrics("disturbance", None, 2.0) == float("inf")

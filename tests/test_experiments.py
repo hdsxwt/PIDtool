@@ -6,6 +6,7 @@ from pidtool.core.experiments import (
     ExperimentRunner,
     ExperimentScript,
     ExperimentStep,
+    autotune_disturbance_script,
     autotune_step_script,
     disturbance_script,
     step_response_script,
@@ -167,3 +168,22 @@ def test_autotune_step_script_structure():
     assert setpoints == [0.0, 2.0]
     kinds = [s.kind for s in script.steps]
     assert kinds.index("collect_start") < kinds.index("prompt") < kinds.index("mark")
+
+
+def test_autotune_disturbance_script_structure():
+    script = autotune_disturbance_script(2.0, disturb_s=3.0, recover_s=2.0)
+    assert script.name == "自动调参扰动"
+    setpoints = [
+        s.params.get("value")
+        for s in script.steps
+        if s.kind == "command" and s.params.get("cmd") == "setpoint"
+    ]
+    assert setpoints == [2.0]
+    kinds = [s.kind for s in script.steps]
+    assert kinds.index("collect_start") < kinds.index("prompt") < kinds.index("mark")
+    labels = [s.params.get("label") for s in script.steps if s.kind == "mark"]
+    assert labels == [MARK_DISTURB_START, MARK_DISTURB_END]
+    manual = [s for s in script.steps if s.kind == "prompt" and s.params.get("manual")]
+    assert len(manual) == 1
+    collect_end = [s for s in script.steps if s.kind == "collect_end"][0]
+    assert collect_end.params["kind"] == "disturbance"

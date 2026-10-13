@@ -8,7 +8,7 @@ import pytest
 from PySide6 import QtWidgets
 
 from pidtool.app_config import DEFAULT_LLM_MODEL, AppConfig
-from pidtool.ui.dialogs import LLMSettingsDialog
+from pidtool.ui.dialogs import AutotunePlanDialog, LLMSettingsDialog
 from pidtool.ui.main_window import MainWindow
 
 
@@ -59,4 +59,41 @@ def test_layout_compaction(qapp, tmp_path):
     window = MainWindow(app_config=config)
     assert window.metrics_table.maximumHeight() <= 200
     assert window.llm_settings_btn.text() == "DeepSeek 设置…"
+    window.close()
+
+
+def test_autotune_plan_dialog_roundtrip(qapp):
+    dialog = AutotunePlanDialog(
+        {"plan": ["step", "disturbance"], "loops": 3, "disturb_s": 2.0, "recover_s": 1.5}
+    )
+    assert dialog._plan() == ["step", "disturbance"]
+    values = dialog.values()
+    assert values["loops"] == 3
+    assert values["disturb_s"] == 2.0
+    assert values["recover_s"] == 1.5
+    assert "共 6 轮" in dialog.summary.text()
+
+    dialog._add_row("step")
+    assert dialog._plan() == ["step", "disturbance", "step"]
+    dialog.list.setCurrentRow(2)
+    dialog._move_selected(-1)
+    assert dialog._plan() == ["step", "step", "disturbance"]
+    dialog._remove_selected()
+    assert dialog._plan() == ["step", "disturbance"]
+    assert "共 6 轮" in dialog.summary.text()
+    dialog.close()
+
+
+def test_apply_plan_settings_persists(qapp, tmp_path):
+    config = AppConfig(path=tmp_path / "app.toml")
+    window = MainWindow(app_config=config)
+    window._apply_plan_settings(
+        {"plan": ["step", "disturbance"], "loops": 2, "disturb_s": 3.0, "recover_s": 2.0}
+    )
+    auto = config.data["autotune"]
+    assert auto["plan"] == ["step", "disturbance"]
+    assert auto["loops"] == 2
+    assert auto["disturb_s"] == 3.0
+    assert auto["recover_s"] == 2.0
+    assert "→ 4 轮" in window.ai_plan_summary.text()
     window.close()

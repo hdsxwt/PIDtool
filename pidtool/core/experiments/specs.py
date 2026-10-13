@@ -109,3 +109,38 @@ def disturbance_script(
             ExperimentStep("collect_end", {"kind": "disturbance"}),
         ),
     )
+
+
+def autotune_disturbance_script(
+    target_sp: float,
+    settle_s: float = 2.0,
+    countdown_s: float = 3.0,
+    disturb_s: float = 5.0,
+    recover_s: float = 4.0,
+) -> ExperimentScript:
+    return ExperimentScript(
+        "自动调参扰动",
+        (
+            ExperimentStep("command", {"cmd": "mode", "mode": "run"}),
+            ExperimentStep("command", {"cmd": "setpoint", "value": target_sp}),
+            ExperimentStep("wait", {"seconds": settle_s}),
+            ExperimentStep("collect_start", {"lookback": 0.5}),
+            ExperimentStep(
+                "prompt",
+                {
+                    "text": f"{countdown_s:.0f} 秒后开始用手给电机施加阻力，坚持 {disturb_s:g} 秒",
+                    "countdown_s": countdown_s,
+                    "manual": False,
+                },
+            ),
+            ExperimentStep("mark", {"label": MARK_DISTURB_START}),
+            ExperimentStep("wait", {"seconds": disturb_s}),
+            ExperimentStep(
+                "prompt",
+                {"text": "请停止施加阻力，然后点击确认", "countdown_s": 0.0, "manual": True},
+            ),
+            ExperimentStep("mark", {"label": MARK_DISTURB_END}),
+            ExperimentStep("wait", {"seconds": recover_s}),
+            ExperimentStep("collect_end", {"kind": "disturbance"}),
+        ),
+    )

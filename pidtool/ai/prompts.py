@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 SYSTEM_PROMPT = (
-    "你是电机速度环 PID 调参专家。用户会给出若干轮阶跃响应实验结果，"
-    "每轮包含 Kp/Ki/Kd 参数与响应指标（评分越低越好），部分轮次会附带"
+    "你是电机速度环 PID 调参专家。用户会按测试方案给出若干轮实验结果："
+    "阶跃轮包含超调、上升/调节时间、稳态误差等指标，"
+    "扰动轮（人工施加负载扰动）包含最大偏差、恢复时间、残余误差等指标；"
+    "每轮给出 Kp/Ki/Kd 与评分（评分越低越好），部分轮次会附带"
     "降采样波形采样（t,sp,fb,u,up,ui,ud 逐行 CSV），可用于分析响应形状、"
-    "超调形态与输出饱和。"
+    "超调形态与输出饱和。不同方案的评分已折算到可比量纲，可直接比较。"
     "你的任务是根据历史表现提出下一组参数：在保证稳定（无持续振荡）的前提下，"
-    "减小超调、缩短上升与调节时间、消除稳态误差。"
+    "减小超调、缩短上升/调节/恢复时间、消除稳态误差与残余偏差。"
     "若某轮之后指标变差，应避免沿该方向继续变化。"
     "只输出 JSON，格式为 "
     '{"kp": 数字, "ki": 数字, "kd": 数字, "reasoning": "一句话理由"}，'
@@ -40,16 +42,30 @@ def build_user_prompt(history: list[dict], limits: dict, setpoint: float) -> str
     ]
     for entry in history:
         marker = "（当前最优）" if entry.get("best") else ""
-        lines.append(
-            f"第{entry.get('iteration', '?')}轮: "
-            f"Kp={_fmt(entry.get('kp'), '.4g')} Ki={_fmt(entry.get('ki'), '.4g')} Kd={_fmt(entry.get('kd'), '.4g')} | "
-            f"超调={_fmt(entry.get('overshoot_pct'), '.2f')}% "
-            f"上升={_fmt(entry.get('rise_time'), '.4f')}s "
-            f"调节={_fmt(entry.get('settling_time'), '.4f')}s "
-            f"稳态误差={_fmt(entry.get('steady_error'), '+.5f')} "
-            f"振荡={'是' if entry.get('oscillating') else '否'} "
-            f"评分={_fmt(entry.get('score'), '.2f')}{marker}"
+        kind = entry.get("kind", "step")
+        gains_text = (
+            f"Kp={_fmt(entry.get('kp'), '.4g')} Ki={_fmt(entry.get('ki'), '.4g')} "
+            f"Kd={_fmt(entry.get('kd'), '.4g')}"
         )
+        if kind == "disturbance":
+            lines.append(
+                f"第{entry.get('iteration', '?')}轮（扰动）: {gains_text} | "
+                f"最大偏差={_fmt(entry.get('max_deviation'), '.4g')} "
+                f"恢复={_fmt(entry.get('recovery_time'), '.4f')}s "
+                f"残余偏差={_fmt(entry.get('residual_error'), '+.5f')} "
+                f"振荡={'是' if entry.get('oscillating') else '否'} "
+                f"评分={_fmt(entry.get('score'), '.2f')}{marker}"
+            )
+        else:
+            lines.append(
+                f"第{entry.get('iteration', '?')}轮（阶跃）: {gains_text} | "
+                f"超调={_fmt(entry.get('overshoot_pct'), '.2f')}% "
+                f"上升={_fmt(entry.get('rise_time'), '.4f')}s "
+                f"调节={_fmt(entry.get('settling_time'), '.4f')}s "
+                f"稳态误差={_fmt(entry.get('steady_error'), '+.5f')} "
+                f"振荡={'是' if entry.get('oscillating') else '否'} "
+                f"评分={_fmt(entry.get('score'), '.2f')}{marker}"
+            )
         waveform = entry.get("waveform")
         if waveform:
             lines.append("  降采样波形 (每行: t,sp,fb,u,up,ui,ud):")

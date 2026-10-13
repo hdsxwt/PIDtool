@@ -14,6 +14,13 @@ APP_CONFIG_PATH = APP_DIR / "app.toml"
 DEFAULT_LLM_MODEL = "deepseek-flash"
 LEGACY_LLM_MODELS = ("", "deepseek-chat")
 
+DEFAULT_AUTOTUNE: dict[str, Any] = {
+    "plan": ["step"] * 8,
+    "loops": 1,
+    "disturb_s": 5.0,
+    "recover_s": 4.0,
+}
+
 DEFAULT_APP_CONFIG: dict[str, Any] = {
     "recent_workspaces": [],
     "last_workspace": "",
@@ -29,6 +36,7 @@ DEFAULT_APP_CONFIG: dict[str, Any] = {
         "timeout_s": 900,
         "auto_approve": True,
     },
+    "autotune": DEFAULT_AUTOTUNE,
     "ui": {"window_s": 10.0},
 }
 

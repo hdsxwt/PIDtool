@@ -99,6 +99,8 @@ class DisturbanceMetrics:
     max_deviation_time: float
     recovery_time: float
     residual_error: float
+    tail_ripple: float
+    oscillating: bool
     samples: int
 
 
@@ -141,7 +143,22 @@ def analyze_disturbance(
 
     tail_start = max(0, n - max(3, int(round(n * tail_fraction))))
     residual = float(setpoint - np.mean(y[tail_start:]))
-    return DisturbanceMetrics(max_deviation, max_deviation_time, recovery, residual, n)
+
+    tail = y[tail_start:]
+    ripple = float((tail.max() - tail.min()) / 2.0)
+    err_tail = y[tail_start:] - setpoint
+    crossings = int(np.count_nonzero(np.diff(np.signbit(err_tail))))
+    oscillating = bool(crossings >= 4 and ripple > band)
+
+    return DisturbanceMetrics(
+        max_deviation,
+        max_deviation_time,
+        recovery,
+        residual,
+        ripple,
+        oscillating,
+        n,
+    )
 
 
 def rmse(y: np.ndarray, reference: float | np.ndarray) -> float:
