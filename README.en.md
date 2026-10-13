@@ -108,7 +108,8 @@ removes files created by the run).
 Notes:
 
 - Default command: `opencode run --dir <project> "<prompt>"` (**no `--auto`** by
-  default); the executable, restricted agent and timeout are configurable
+  default); executable, restricted agent and timeout live in the "opencode 设置…"
+  dialog on the tab
 - Every authorized run shows a confirmation dialog listing the command and the
   risk boundary; to let the agent edit automatically, explicitly tick
   "自动批准工具权限（--auto）" (high risk, with a second warning; off by default —

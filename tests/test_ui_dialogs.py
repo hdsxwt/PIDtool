@@ -8,7 +8,7 @@ import pytest
 from PySide6 import QtWidgets
 
 from pidtool.app_config import DEFAULT_LLM_MODEL, AppConfig
-from pidtool.ui.dialogs import AutotunePlanDialog, LLMSettingsDialog
+from pidtool.ui.dialogs import AutotunePlanDialog, LLMSettingsDialog, OpencodeSettingsDialog
 from pidtool.ui.main_window import MainWindow
 
 
@@ -83,6 +83,47 @@ def test_bottom_panel_sizes_follow_tabs(qapp, tmp_path):
     window.bottom_tabs.setCurrentIndex(0)
     assert window.main_splitter.sizes()[1] == 220
     window.close()
+
+
+def test_opencode_settings_dialog_roundtrip(qapp):
+    dialog = OpencodeSettingsDialog(
+        {"executable": "opencode", "agent_name": "pid", "timeout_s": 300, "auto_approve": False}
+    )
+    assert dialog.exe_edit.text() == "opencode"
+    assert dialog.agent_edit.text() == "pid"
+    assert dialog.timeout_spin.value() == 300
+    assert not dialog.auto_check.isChecked()
+
+    dialog.agent_edit.setText("")
+    dialog.timeout_spin.setValue(600)
+    values = dialog.values()
+    assert values["agent_name"] == ""
+    assert values["timeout_s"] == 600
+    assert values["auto_approve"] is False
+    assert values["executable"] == "opencode"
+    dialog.close()
+
+
+def test_opencode_settings_dialog_auto_requires_confirmation(qapp, monkeypatch):
+    dialog = OpencodeSettingsDialog({"auto_approve": False})
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "warning",
+        staticmethod(lambda *a, **k: QtWidgets.QMessageBox.StandardButton.No),
+    )
+    dialog.auto_check.setChecked(True)
+    assert not dialog.auto_check.isChecked()
+    assert dialog.values()["auto_approve"] is False
+
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "warning",
+        staticmethod(lambda *a, **k: QtWidgets.QMessageBox.StandardButton.Yes),
+    )
+    dialog.auto_check.setChecked(True)
+    assert dialog.auto_check.isChecked()
+    assert dialog.values()["auto_approve"] is True
+    dialog.close()
 
 
 def test_autotune_plan_dialog_roundtrip(qapp):

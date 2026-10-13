@@ -330,3 +330,66 @@ class AutotunePlanDialog(QtWidgets.QDialog):
         }
 
 
+class OpencodeSettingsDialog(QtWidgets.QDialog):
+    def __init__(self, values: dict, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("opencode 设置")
+        self.setMinimumWidth(520)
+        form = QtWidgets.QFormLayout(self)
+        self.exe_edit = QtWidgets.QLineEdit(str(values.get("executable", "opencode")))
+        self.agent_edit = QtWidgets.QLineEdit(str(values.get("agent_name", "")))
+        self.agent_edit.setPlaceholderText("可选：受限 agent 名称")
+        self.timeout_spin = QtWidgets.QSpinBox()
+        self.timeout_spin.setRange(60, 3600)
+        self.timeout_spin.setSuffix(" s")
+        self.timeout_spin.setValue(int(values.get("timeout_s", 900)))
+        self.auto_check = QtWidgets.QCheckBox("自动批准工具权限（--auto，高风险）")
+        self.auto_check.setToolTip(
+            "启用后 opencode 可自动执行命令与编辑；仓库外副作用不可审查也不可回滚，"
+            "仅在你信任该工程时启用"
+        )
+        self.auto_check.setChecked(bool(values.get("auto_approve", False)))
+        self.auto_check.toggled.connect(self._on_auto_toggled)
+        form.addRow("可执行文件", self.exe_edit)
+        form.addRow("Agent", self.agent_edit)
+        form.addRow("超时", self.timeout_spin)
+        form.addRow(self.auto_check)
+        hint = QtWidgets.QLabel("设置保存在本机全局配置，不写入固件目录")
+        hint.setStyleSheet("color: #888;")
+        form.addRow(hint)
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Save
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Save).setText("保存")
+        buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def _on_auto_toggled(self, checked: bool) -> None:
+        if not checked:
+            return
+        answer = QtWidgets.QMessageBox.warning(
+            self,
+            "启用高风险权限",
+            "启用 --auto 后，opencode 将自动获得工具权限，可在工程目录执行任意命令。\n"
+            "diff 审查与回滚只覆盖仓库内 git 可见的改动，仓库外副作用不可见也不可回滚。\n\n"
+            "确定启用吗？",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+            self.auto_check.blockSignals(True)
+            self.auto_check.setChecked(False)
+            self.auto_check.blockSignals(False)
+
+    def values(self) -> dict:
+        return {
+            "executable": self.exe_edit.text().strip() or "opencode",
+            "agent_name": self.agent_edit.text().strip(),
+            "timeout_s": int(self.timeout_spin.value()),
+            "auto_approve": self.auto_check.isChecked(),
+        }
+
+

@@ -963,25 +963,61 @@ def test_export_current_uses_last_metrics(window):
 
 
 def test_codeagent_settings_roundtrip(window):
-    window.code_exe_edit.setText("C:/tools/opencode.exe")
-    window.code_agent_edit.setText("pid-editor")
-    window.code_timeout_spin.setValue(120)
-    window._save_codeagent_settings()
+    window._apply_codeagent_settings(
+        {
+            "executable": "C:/tools/opencode.exe",
+            "agent_name": "pid-editor",
+            "timeout_s": 120,
+            "auto_approve": False,
+        }
+    )
     cfg = window.app_config.data["codeagent"]
     assert cfg["executable"] == "C:/tools/opencode.exe"
     assert cfg["agent_name"] == "pid-editor"
     assert cfg["timeout_s"] == 120
     assert cfg["auto_approve"] is False
-    assert not window.code_auto_check.isChecked()
     assert "已保存" in window.statusBar().currentMessage()
+    assert "C:/tools/opencode.exe" in window.code_settings_summary.text()
+    assert "pid-editor" in window.code_settings_summary.text()
+    assert "--auto 关" in window.code_settings_summary.text()
 
-    window.code_exe_edit.setText("")
-    window.code_agent_edit.setText("")
     agent = window._make_code_agent()
-    assert agent.executable == "opencode"
-    assert agent.agent_name == ""
+    assert agent.executable == "C:/tools/opencode.exe"
+    assert agent.agent_name == "pid-editor"
     assert agent.timeout == 120.0
     assert agent.auto_approve is False
+
+    window.app_config.data["codeagent"] = {}
+    fallback = window._make_code_agent()
+    assert fallback.executable == "opencode"
+    assert fallback.agent_name == ""
+    assert fallback.timeout == 900.0
+    assert fallback.auto_approve is False
+
+
+def test_open_codeagent_settings_dialog_accepted(window, monkeypatch):
+    class FakeDialog:
+        def __init__(self, values, parent=None):
+            self._values = values
+
+        def exec(self):
+            return QtWidgets.QDialog.DialogCode.Accepted
+
+        def values(self):
+            return {
+                "executable": "opencode",
+                "agent_name": "limited",
+                "timeout_s": 300,
+                "auto_approve": True,
+            }
+
+    monkeypatch.setattr(mw, "OpencodeSettingsDialog", FakeDialog)
+    window._open_codeagent_settings_dialog()
+    cfg = window.app_config.data["codeagent"]
+    assert cfg["agent_name"] == "limited"
+    assert cfg["timeout_s"] == 300
+    assert cfg["auto_approve"] is True
+    assert "--auto 开" in window.code_settings_summary.text()
 
 
 def test_code_preview_guards(window, tmp_path):
@@ -1055,20 +1091,6 @@ def test_code_run_agent_and_start_failures(window, tmp_path, modal_recorder):
     assert modal_recorder[-1][1] == "启动失败"
 
 
-def test_code_auto_checkbox_requires_confirmation(window, monkeypatch):
-    assert not window.code_auto_check.isChecked()
-    window.code_auto_check.setChecked(True)
-    assert not window.code_auto_check.isChecked()
-
-    monkeypatch.setattr(
-        QtWidgets.QMessageBox,
-        "warning",
-        staticmethod(lambda *a, **k: QtWidgets.QMessageBox.StandardButton.Yes),
-    )
-    window.code_auto_check.setChecked(True)
-    assert window.code_auto_check.isChecked()
-
-
 def test_code_confirm_run_content(window, tmp_path, modal_recorder):
     repo = _make_repo(tmp_path)
     window._activate_workspace(repo)
@@ -1081,9 +1103,7 @@ def test_code_confirm_run_content(window, tmp_path, modal_recorder):
     assert "--auto" not in question[2].splitlines()[1]
     assert "未启用 --auto" in question[2]
 
-    window.code_auto_check.blockSignals(True)
-    window.code_auto_check.setChecked(True)
-    window.code_auto_check.blockSignals(False)
+    window.app_config.data["codeagent"]["auto_approve"] = True
     assert window._confirm_code_run() is True
     question = [call for call in modal_recorder if call[0] == "question"][-1]
     assert "--auto" in question[2].splitlines()[1]

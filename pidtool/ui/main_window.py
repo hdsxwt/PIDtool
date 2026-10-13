@@ -16,7 +16,7 @@ from pidtool.ai.plan import normalize_rounds
 from pidtool.ai.tuner import AutoTuner
 from pidtool.app_config import DEFAULT_LLM_MODEL, AppConfig
 from pidtool.codeagent import CodeEditSession, OpencodeAgent, build_code_prompt
-from pidtool.ui.dialogs import AutotunePlanDialog, LLMSettingsDialog
+from pidtool.ui.dialogs import AutotunePlanDialog, LLMSettingsDialog, OpencodeSettingsDialog
 from pidtool.core.experiments import (
     ExperimentRunner,
     ExperimentScript,
@@ -472,28 +472,15 @@ class MainWindow(QtWidgets.QMainWindow):
         request_layout.addWidget(self.code_context_check)
         left.addWidget(request_group)
 
-        settings_group = QtWidgets.QGroupBox("opencode 设置（全局配置）")
-        settings_form = QtWidgets.QFormLayout(settings_group)
-        self.code_exe_edit = QtWidgets.QLineEdit()
-        self.code_agent_edit = QtWidgets.QLineEdit()
-        self.code_agent_edit.setPlaceholderText("可选：受限 agent 名称")
-        self.code_timeout_spin = QtWidgets.QSpinBox()
-        self.code_timeout_spin.setRange(60, 3600)
-        self.code_timeout_spin.setSuffix(" s")
-        self.code_auto_check = QtWidgets.QCheckBox("自动批准工具权限（--auto，高风险）")
-        self.code_auto_check.setToolTip(
-            "启用后 opencode 可自动执行命令与编辑；仓库外副作用不可审查也不可回滚，"
-            "仅在你信任该工程时启用"
-        )
-        self.code_auto_check.toggled.connect(self._on_code_auto_toggled)
-        settings_form.addRow("可执行文件", self.code_exe_edit)
-        settings_form.addRow("Agent", self.code_agent_edit)
-        settings_form.addRow("超时", self.code_timeout_spin)
-        settings_form.addRow(self.code_auto_check)
-        code_save_btn = QtWidgets.QPushButton("保存设置")
-        code_save_btn.clicked.connect(self._save_codeagent_settings)
-        settings_form.addRow(code_save_btn)
-        left.addWidget(settings_group)
+        settings_row = QtWidgets.QHBoxLayout()
+        self.code_settings_btn = QtWidgets.QPushButton("opencode 设置…")
+        self.code_settings_btn.clicked.connect(self._open_codeagent_settings_dialog)
+        self.code_settings_summary = QtWidgets.QLabel(self._codeagent_summary_text())
+        self.code_settings_summary.setStyleSheet("color: #888;")
+        settings_row.addWidget(self.code_settings_btn)
+        settings_row.addWidget(self.code_settings_summary)
+        settings_row.addStretch(1)
+        left.addLayout(settings_row)
 
         button_row = QtWidgets.QHBoxLayout()
         self.code_preview_btn = QtWidgets.QPushButton("生成预览")
@@ -546,7 +533,6 @@ class MainWindow(QtWidgets.QMainWindow):
         right.addLayout(review_row)
         layout.addLayout(right, 1)
 
-        self._load_codeagent_settings_into_ui()
         return tab
 
     def _build_statusbar(self) -> None:
@@ -1602,45 +1588,39 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._status(f"已导出 {config_path.name} 与 {header_path.name} 到 {config_path.parent}")
 
-    def _load_codeagent_settings_into_ui(self) -> None:
-        cfg = self.app_config.data.get("codeagent", {})
-        self.code_exe_edit.setText(str(cfg.get("executable", "opencode")))
-        self.code_agent_edit.setText(str(cfg.get("agent_name", "")))
-        self.code_timeout_spin.setValue(int(cfg.get("timeout_s", 900)))
-        self.code_auto_check.blockSignals(True)
-        self.code_auto_check.setChecked(bool(cfg.get("auto_approve", False)))
-        self.code_auto_check.blockSignals(False)
+    def _codeagent_config(self) -> dict:
+        return self.app_config.data.get("codeagent", {})
 
-    def _save_codeagent_settings(self) -> None:
+    def _codeagent_summary_text(self) -> str:
+        cfg = self._codeagent_config()
+        parts = [str(cfg.get("executable", "opencode"))]
+        agent = str(cfg.get("agent_name", "")).strip()
+        if agent:
+            parts.append(f"agent:{agent}")
+        parts.append(f"{int(cfg.get('timeout_s', 900))}s")
+        parts.append("--auto 开" if cfg.get("auto_approve", False) else "--auto 关")
+        return " · ".join(parts)
+
+    def _open_codeagent_settings_dialog(self) -> None:
+        dialog = OpencodeSettingsDialog(dict(self._codeagent_config()), self)
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            self._apply_codeagent_settings(dialog.values())
+
+    def _apply_codeagent_settings(self, values: dict) -> None:
         cfg = self.app_config.data.setdefault("codeagent", {})
-        cfg["executable"] = self.code_exe_edit.text().strip() or "opencode"
-        cfg["agent_name"] = self.code_agent_edit.text().strip()
-        cfg["timeout_s"] = int(self.code_timeout_spin.value())
-        cfg["auto_approve"] = self.code_auto_check.isChecked()
+        cfg["executable"] = values.get("executable") or "opencode"
+        cfg["agent_name"] = str(values.get("agent_name", "")).strip()
+        cfg["timeout_s"] = int(values.get("timeout_s", 900))
+        cfg["auto_approve"] = bool(values.get("auto_approve", False))
         self.app_config.save()
+        self.code_settings_summary.setText(self._codeagent_summary_text())
         self._status("opencode 设置已保存（全局配置）")
 
-    def _on_code_auto_toggled(self, checked: bool) -> None:
-        if not checked:
-            return
-        answer = QtWidgets.QMessageBox.warning(
-            self,
-            "启用高风险权限",
-            "启用 --auto 后，opencode 将自动获得工具权限，可在工程目录执行任意命令。\n"
-            "diff 审查与回滚只覆盖仓库内 git 可见的改动，仓库外副作用不可见也不可回滚。\n\n"
-            "确定启用吗？",
-            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
-            QtWidgets.QMessageBox.StandardButton.No,
-        )
-        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
-            self.code_auto_check.blockSignals(True)
-            self.code_auto_check.setChecked(False)
-            self.code_auto_check.blockSignals(False)
-
     def _confirm_code_run(self) -> bool:
-        auto = self.code_auto_check.isChecked()
-        exe = self.code_exe_edit.text().strip() or "opencode"
-        agent = self.code_agent_edit.text().strip()
+        cfg = self._codeagent_config()
+        auto = bool(cfg.get("auto_approve", False))
+        exe = str(cfg.get("executable", "opencode") or "opencode")
+        agent = str(cfg.get("agent_name", "")).strip()
         auto_part = " --auto" if auto else ""
         agent_part = f" --agent {agent}" if agent else ""
         workdir = self.workspace.root if self.workspace is not None else "?"
@@ -1661,11 +1641,12 @@ class MainWindow(QtWidgets.QMainWindow):
         return answer == QtWidgets.QMessageBox.StandardButton.Yes
 
     def _make_code_agent(self) -> OpencodeAgent:
+        cfg = self._codeagent_config()
         return OpencodeAgent(
-            executable=self.code_exe_edit.text().strip() or "opencode",
-            agent_name=self.code_agent_edit.text().strip(),
-            auto_approve=self.code_auto_check.isChecked(),
-            timeout=float(self.code_timeout_spin.value()),
+            executable=str(cfg.get("executable", "opencode") or "opencode"),
+            agent_name=str(cfg.get("agent_name", "")).strip(),
+            auto_approve=bool(cfg.get("auto_approve", False)),
+            timeout=float(cfg.get("timeout_s", 900)),
         )
 
     def _code_preview_clicked(self) -> None:
@@ -1679,9 +1660,11 @@ class MainWindow(QtWidgets.QMainWindow):
         gains = self._gains_dict() if self.code_context_check.isChecked() else None
         metrics = self._last_metrics if self.code_context_check.isChecked() else None
         self._code_prompt = build_code_prompt(request, self.workspace.root, gains, metrics)
-        exe = self.code_exe_edit.text().strip() or "opencode"
-        agent_part = f" --agent {self.code_agent_edit.text().strip()}" if self.code_agent_edit.text().strip() else ""
-        auto_part = " --auto" if self.code_auto_check.isChecked() else ""
+        cfg = self._codeagent_config()
+        exe = str(cfg.get("executable", "opencode") or "opencode")
+        agent = str(cfg.get("agent_name", "")).strip()
+        agent_part = f" --agent {agent}" if agent else ""
+        auto_part = " --auto" if cfg.get("auto_approve", False) else ""
         command_line = f'{exe} run --dir "{self.workspace.root}"{auto_part}{agent_part} "<提示词>"'
         problems = CodeEditSession.precheck(self.workspace.root)
         problem_text = "\n".join(f"- {p}" for p in problems)
@@ -1775,7 +1758,7 @@ class MainWindow(QtWidgets.QMainWindow):
         status_text = "执行结束（{}）".format("，".join(status_bits))
         if has_changes:
             self.code_status.setText(f"{status_text}；请审查 diff 后选择保留或回滚")
-        elif self.code_auto_check.isChecked():
+        elif self._codeagent_config().get("auto_approve", False):
             self.code_status.setText(f"{status_text}；未检测到改动")
         else:
             self.code_status.setText(
