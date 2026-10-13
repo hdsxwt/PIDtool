@@ -73,8 +73,8 @@ def test_iteration_flow_and_best_restore():
 
     tuner.on_trial(make_metrics(overshoot=15.0), {"kp": 6.0, "ki": 30.0, "kd": 0.2}, 2.0)
     assert not tuner.active
-    assert kinds(events)[-2:] == ["apply_gains", "finished"]
-    assert events[-2][1] == {"kp": 5.0, "ki": 40.0, "kd": 0.1}
+    assert kinds(events)[-3:] == ["apply_gains", "pause_motor", "finished"]
+    assert events[-3][1] == {"kp": 5.0, "ki": 40.0, "kd": 0.1}
     finished = events[-1][1]
     assert finished["reason"] == "完成全部轮次"
     assert finished["iterations"] == 3
@@ -290,3 +290,32 @@ def test_unified_scoring_is_comparable():
     assert 0.0 < step_score < 100.0
     assert 0.0 < dist_score < 100.0
     assert score_metrics("disturbance", None, 2.0) == float("inf")
+
+
+def test_pause_motor_events():
+    events: list[tuple[str, dict]] = []
+    tuner = AutoTuner(lambda k, d: events.append((k, d)), async_mode=False)
+    tuner.start(
+        4.0,
+        60.0,
+        0.05,
+        plan=["step"] * 2,
+        loops=1,
+        suggest=lambda h, l, sp: Suggestion(5.0, 40.0, 0.1, ""),
+        limits=LIMITS,
+        setpoint=2.0,
+    )
+    assert kinds(events) == ["status", "apply_gains", "run_experiment"]
+
+    tuner.on_trial(make_metrics(), {"kp": 4.0, "ki": 60.0, "kd": 0.05}, 2.0)
+    event_kinds = kinds(events)
+    pause_index = event_kinds.index("pause_motor")
+    request_status_index = max(
+        index for index, name in enumerate(event_kinds) if name == "status"
+    )
+    assert pause_index < request_status_index
+
+    tuner.tick()
+    tuner.on_trial(make_metrics(), {"kp": 5.0, "ki": 40.0, "kd": 0.1}, 2.0)
+    assert not tuner.active
+    assert kinds(events)[-2:] == ["pause_motor", "finished"]

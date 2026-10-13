@@ -163,7 +163,8 @@ class AutoTuner:
         if self._worse_streak >= 3:
             self._graceful_finish("连续 3 轮退化，提前停止")
             return
-        self._on_event("status", {"text": "正在请求 AI 建议…"})
+        self._on_event("pause_motor", {})
+        self._on_event("status", {"text": "正在请求 AI 建议…（电机已停止）"})
         self._request()
 
     def tick(self) -> None:
@@ -239,6 +240,7 @@ class AutoTuner:
                 self._emit_apply(best_gains)
         self._active = False
         self._worker = None
+        self._on_event("pause_motor", {})
         self._on_event(
             "finished",
             {

@@ -788,8 +788,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if not silent:
             self._status(f"已下发目标值 {value:g}")
 
-    def _set_mode(self, mode: int) -> None:
-        if not self._ensure_link():
+    def _set_mode(self, mode: int, silent: bool = False) -> None:
+        if not self._ensure_link(silent=silent):
             return
         assert self.link is not None
         try:
@@ -797,7 +797,8 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as exc:
             self._status(f"发送失败: {exc}")
             return
-        self._status("已使能" if mode == MODE_RUN else "已停止")
+        if not silent:
+            self._status("已使能" if mode == MODE_RUN else "已停止")
 
     def _start_telemetry(self, checked: bool = False) -> None:
         if not self._ensure_link():
@@ -1322,6 +1323,9 @@ class MainWindow(QtWidgets.QMainWindow):
                     measure_s=self.ai_measure_spin.value(),
                 )
             self._run_script(script)
+        elif kind == "pause_motor":
+            if self.link is not None and self.link.is_open:
+                self._set_mode(MODE_IDLE, silent=True)
         elif kind == "iteration":
             self._append_ai_log_row(data)
         elif kind == "finished":

@@ -10,6 +10,7 @@ from PySide6 import QtWidgets
 
 from pidtool.ai.llm import Suggestion
 from pidtool.app_config import AppConfig
+from pidtool.link.protocol import MODE_IDLE
 from pidtool.ui.main_window import MainWindow
 
 
@@ -61,6 +62,15 @@ def test_autotune_ui_flow(qapp, tmp_path):
         assert setpoint == 2.0
         return Suggestion(5.0, 40.0, 0.1, "fake suggestion")
 
+    observed_modes: list[int] = []
+    original_handler = window._on_tuner_event
+
+    def spy(kind, data):
+        original_handler(kind, data)
+        if kind == "pause_motor" and window.link is not None:
+            observed_modes.append(window.link.mode)
+
+    window.tuner._on_event = spy
     window._make_suggest = lambda: fake_suggest
     window._start_autotune()
     assert window.tuner.active
@@ -77,6 +87,9 @@ def test_autotune_ui_flow(qapp, tmp_path):
     assert window.ai_start_btn.isEnabled()
     assert not window.ai_abort_btn.isEnabled()
     assert "2 轮" in window.ai_status.text()
+    assert len(observed_modes) >= 2
+    assert all(mode == MODE_IDLE for mode in observed_modes)
+    assert window.link.mode == MODE_IDLE
 
     trials = [t for t in window.workspace.read_trials() if t.get("kind") == "script_step"]
     assert len(trials) == 2
@@ -131,6 +144,7 @@ def test_autotune_mixed_plan_ui(qapp, tmp_path):
     ]
     assert plan_column == ["阶跃", "扰动"]
     assert window.ai_status.text().startswith("完成全部轮次")
+    assert window.link.mode == MODE_IDLE
 
     window._disconnect()
     window.close()
