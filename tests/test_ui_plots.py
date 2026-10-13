@@ -83,15 +83,45 @@ def test_reset_view_restores_autorange(qapp):
     data = _data()
     panel.update_data(data, float(data["t"][-1]))
     panel.plot_track.setXRange(0.0, 1.0)
-    panel.plot_track.setYRange(0.0, 0.001)
     assert not panel.plot_track.vb.autoRangeEnabled()[0]
-    assert not panel.plot_track.vb.autoRangeEnabled()[1]
+    panel._on_manual_range()
+    assert panel._auto_y is False
 
     panel.reset_view()
 
     assert panel.plot_track.vb.autoRangeEnabled()[0]
-    assert panel.plot_track.vb.autoRangeEnabled()[1]
-    assert panel.plot_terms.vb.autoRangeEnabled()[1]
+    assert panel._auto_y is True
+
+
+def test_y_range_keeps_minimum_span(qapp):
+    panel = PlotPanel()
+    t = np.arange(41000, dtype=np.float64) * 0.005
+    steady = (1.0 + 0.002 * np.sin(t * 50.0)).astype(np.float32)
+    data = {
+        "t": t,
+        "setpoint": np.ones_like(steady),
+        "feedback": steady,
+        "u": np.ones_like(steady),
+        "up": np.ones_like(steady),
+        "ui": np.ones_like(steady),
+        "ud": np.zeros_like(steady),
+    }
+    panel.update_data(data, float(t[-1]))
+    low, high = panel.plot_track.vb.viewRange()[1]
+    assert high - low >= 0.1
+    assert low < 1.0 < high
+
+
+def test_manual_range_disables_auto_y(qapp):
+    panel = PlotPanel()
+    data = _data()
+    panel.update_data(data, float(data["t"][-1]))
+    panel._on_manual_range()
+    panel.plot_track.setYRange(5.0, 6.0, padding=0)
+    panel.update_data(data, float(data["t"][-1]))
+    low, high = panel.plot_track.vb.viewRange()[1]
+    assert abs(low - 5.0) < 0.05
+    assert abs(high - 6.0) < 0.05
 
 
 def test_update_data_empty_returns(qapp):

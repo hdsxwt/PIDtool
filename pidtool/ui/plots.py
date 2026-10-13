@@ -36,6 +36,8 @@ class PlotPanel(QtWidgets.QWidget):
             plot.showGrid(x=True, y=True, alpha=0.25)
             plot.setDownsampling(auto=True, mode="peak")
             plot.setClipToView(True)
+            plot.getViewBox().enableAutoRange(axis=1, enable=False)
+            plot.getViewBox().sigRangeChangedManually.connect(self._on_manual_range)
         self.plot_terms.setLabel("bottom", "t (s, 相对当前)")
         self.plot_track.addLegend(offset=(10, 10))
         self.plot_terms.addLegend(offset=(10, 10))
@@ -86,6 +88,7 @@ class PlotPanel(QtWidgets.QWidget):
         layout.addWidget(self.glw, 1)
 
         self._frozen_t: float | None = None
+        self._auto_y = True
         self.markers: list[tuple[float, list[tuple[pg.PlotItem, pg.InfiniteLine]]]] = []
 
     def clear(self) -> None:
@@ -95,12 +98,35 @@ class PlotPanel(QtWidgets.QWidget):
         self._frozen_t = None
 
     def reset_view(self) -> None:
+        self._auto_y = True
         master = self.plot_track.getViewBox()
-        master.enableAutoRange(axis=None, enable=True)
+        master.enableAutoRange(axis=0, enable=True)
         master.updateAutoRange()
-        child = self.plot_terms.getViewBox()
-        child.enableAutoRange(axis=1, enable=True)
-        child.updateAutoRange()
+        for plot in (self.plot_track, self.plot_terms):
+            plot.getViewBox().enableAutoRange(axis=1, enable=False)
+
+    def _on_manual_range(self, *args) -> None:
+        self._auto_y = False
+
+    @staticmethod
+    def _y_bounds(arrays: list[np.ndarray]) -> tuple[float, float] | None:
+        if any(array.size == 0 for array in arrays):
+            return None
+        ymin = float(min(array.min() for array in arrays))
+        ymax = float(max(array.max() for array in arrays))
+        peak = max(abs(ymin), abs(ymax))
+        span = max(ymax - ymin, 0.1 * peak, 0.01)
+        center = (ymin + ymax) / 2.0
+        pad = span * 0.1
+        return center - span / 2.0 - pad, center + span / 2.0 + pad
+
+    def _apply_y_ranges(self, ys: dict[str, np.ndarray]) -> None:
+        bounds = self._y_bounds([ys["setpoint"], ys["feedback"]])
+        if bounds is not None:
+            self.plot_track.setYRange(bounds[0], bounds[1], padding=0)
+        bounds = self._y_bounds([ys["u"], ys["up"], ys["ui"], ys["ud"]])
+        if bounds is not None:
+            self.plot_terms.setYRange(bounds[0], bounds[1], padding=0)
 
     def add_marker(self, t: float, label: str) -> None:
         pen = pg.mkPen("#ffd166", width=1.2, style=QtCore.Qt.PenStyle.DashDotLine)
@@ -148,5 +174,8 @@ class PlotPanel(QtWidgets.QWidget):
         x = t - t_ref
         step = max(1, t.size // MAX_PLOT_POINTS)
         xs = x[::step]
-        for key in self.curves:
-            self.curves[key].setData(xs, data[key][idx::step])
+        ys = {key: data[key][idx::step] for key in self.curves}
+        for key, curve in self.curves.items():
+            curve.setData(xs, ys[key])
+        if self._auto_y:
+            self._apply_y_ranges(ys)
