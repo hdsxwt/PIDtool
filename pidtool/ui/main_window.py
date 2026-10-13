@@ -14,6 +14,7 @@ from pidtool.ai.llm import DeepSeekTuner
 from pidtool.ai.tuner import AutoTuner
 from pidtool.app_config import DEFAULT_LLM_MODEL, AppConfig
 from pidtool.codeagent import CodeEditSession, OpencodeAgent, build_code_prompt
+from pidtool.ui.dialogs import LLMSettingsDialog
 from pidtool.core.experiments import (
     ExperimentRunner,
     ExperimentScript,
@@ -197,7 +198,7 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter.addWidget(self.bottom_tabs)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([560, 280])
+        splitter.setSizes([660, 180])
 
     def _build_gains_group(self) -> QtWidgets.QGroupBox:
         group = QtWidgets.QGroupBox("PID 参数（在线下发）")
@@ -280,6 +281,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.metrics_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
         self._set_metrics_rows([(name, "—") for name in METRIC_ROWS])
         self.metrics_table.setMinimumWidth(360)
+        self.metrics_table.setMaximumHeight(150)
         layout.addWidget(self.metrics_table)
         return group
 
@@ -355,19 +357,15 @@ class MainWindow(QtWidgets.QMainWindow):
         exp_form.addRow(button_row)
         left.addWidget(exp_group)
 
-        llm_group = QtWidgets.QGroupBox("DeepSeek 设置（保存在全局配置，不写入固件目录）")
-        llm_form = QtWidgets.QFormLayout(llm_group)
-        self.llm_base_edit = QtWidgets.QLineEdit()
-        self.llm_model_edit = QtWidgets.QLineEdit()
-        self.llm_key_edit = QtWidgets.QLineEdit()
-        self.llm_key_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
-        llm_form.addRow("Base URL", self.llm_base_edit)
-        llm_form.addRow("模型", self.llm_model_edit)
-        llm_form.addRow("API Key", self.llm_key_edit)
-        llm_save_btn = QtWidgets.QPushButton("保存 LLM 设置")
-        llm_save_btn.clicked.connect(self._save_llm_settings)
-        llm_form.addRow(llm_save_btn)
-        left.addWidget(llm_group)
+        llm_row = QtWidgets.QHBoxLayout()
+        self.llm_settings_btn = QtWidgets.QPushButton("DeepSeek 设置…")
+        self.llm_settings_btn.clicked.connect(self._open_llm_settings_dialog)
+        self.llm_summary = QtWidgets.QLabel(self._llm_summary_text())
+        self.llm_summary.setStyleSheet("color: #888;")
+        llm_row.addWidget(self.llm_settings_btn)
+        llm_row.addWidget(self.llm_summary)
+        llm_row.addStretch(1)
+        left.addLayout(llm_row)
         left.addStretch(1)
         layout.addLayout(left)
 
@@ -382,12 +380,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ai_log.verticalHeader().setVisible(False)
         self.ai_log.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.ai_log.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
-        self.ai_status = QtWidgets.QLabel("就绪：填写 API Key 后可开始自动调参")
+        self.ai_status = QtWidgets.QLabel("就绪：配置 API Key 后可开始自动调参")
         right.addWidget(self.ai_log, 1)
         right.addWidget(self.ai_status)
         layout.addLayout(right, 1)
 
-        self._load_llm_settings_into_ui()
         return tab
 
     def _build_history_tab(self) -> QtWidgets.QWidget:
@@ -1156,18 +1153,25 @@ class MainWindow(QtWidgets.QMainWindow):
             self.metrics_table.setItem(i, 0, QtWidgets.QTableWidgetItem(name))
             self.metrics_table.setItem(i, 1, QtWidgets.QTableWidgetItem(value))
 
-    def _load_llm_settings_into_ui(self) -> None:
+    def _llm_summary_text(self) -> str:
         llm = self.app_config.data.get("llm", {})
-        self.llm_base_edit.setText(str(llm.get("base_url", "https://api.deepseek.com")))
-        self.llm_model_edit.setText(str(llm.get("model", DEFAULT_LLM_MODEL)))
-        self.llm_key_edit.setText(str(llm.get("api_key", "")))
+        model = str(llm.get("model", DEFAULT_LLM_MODEL))
+        state = "已配置 Key" if str(llm.get("api_key", "")).strip() else "未配置 Key"
+        return f"{model} · {state}"
 
-    def _save_llm_settings(self) -> None:
+    def _open_llm_settings_dialog(self) -> None:
+        llm = dict(self.app_config.data.get("llm", {}))
+        dialog = LLMSettingsDialog(llm, self)
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            self._apply_llm_settings(dialog.values())
+
+    def _apply_llm_settings(self, values: dict) -> None:
         llm = self.app_config.data.setdefault("llm", {})
-        llm["base_url"] = self.llm_base_edit.text().strip() or "https://api.deepseek.com"
-        llm["model"] = self.llm_model_edit.text().strip() or DEFAULT_LLM_MODEL
-        llm["api_key"] = self.llm_key_edit.text().strip()
+        llm["base_url"] = values.get("base_url") or "https://api.deepseek.com"
+        llm["model"] = values.get("model") or DEFAULT_LLM_MODEL
+        llm["api_key"] = values.get("api_key", "")
         self.app_config.save()
+        self.llm_summary.setText(self._llm_summary_text())
         self._status("LLM 设置已保存（全局配置，不写入固件目录）")
 
     def _make_suggest(self):
@@ -1189,7 +1193,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if not str(self.app_config.data.get("llm", {}).get("api_key", "")).strip():
             QtWidgets.QMessageBox.information(
-                self, "缺少 API Key", "请先在“AI 调参”页填写 DeepSeek API Key 并点击保存。"
+                self, "缺少 API Key", "请先点击“DeepSeek 设置…”填写 API Key 并保存。"
             )
             return
         try:
