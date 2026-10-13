@@ -137,3 +137,59 @@ def test_revert_ignores_unlink_errors(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "unlink", broken_unlink)
     removed = git_tools.revert(repo, set())
     assert removed == []
+
+
+def test_has_head(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git_tools.run_git(["init"], repo)
+    assert not git_tools.has_head(repo)
+    (repo / "a.c").write_text("x", encoding="utf-8")
+    git_tools.run_git(["add", "."], repo)
+    git_tools.run_git(
+        ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "init"], repo
+    )
+    assert git_tools.has_head(repo)
+
+
+def test_staged_changes_visible_and_revert_cleans_them(tmp_path):
+    repo = _make_repo(tmp_path)
+    (repo / "pid.c").write_text("MALICIOUS\n", encoding="utf-8")
+    (repo / "new.c").write_text("int new;\n", encoding="utf-8")
+    git_tools.run_git(["add", "."], repo)
+
+    assert "MALICIOUS" in git_tools.diff_text(repo)
+    assert git_tools.changed_files(repo) == ["new.c", "pid.c"]
+    assert "pid.c" in git_tools.diff_stat(repo)
+
+    removed = git_tools.revert(repo, set())
+    assert removed == ["new.c"]
+    assert (repo / "pid.c").read_text(encoding="utf-8") == "float kp = 1.0f;\n"
+    assert not (repo / "new.c").exists()
+    assert git_tools.tracked_changes(repo) == []
+    assert git_tools.untracked_files(repo) == set()
+
+
+def test_mixed_staged_and_unstaged_visible_and_reverted(tmp_path):
+    repo = _make_repo(tmp_path)
+    (repo / "other.c").write_text("old\n", encoding="utf-8")
+    git_tools.run_git(["add", "."], repo)
+    git_tools.run_git(
+        ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "add"], repo
+    )
+
+    (repo / "pid.c").write_text("STAGED-CHANGE\n", encoding="utf-8")
+    git_tools.run_git(["add", "pid.c"], repo)
+    (repo / "other.c").write_text("UNSTAGED-CHANGE\n", encoding="utf-8")
+
+    text = git_tools.diff_text(repo)
+    assert "STAGED-CHANGE" in text
+    assert "UNSTAGED-CHANGE" in text
+    files = git_tools.changed_files(repo)
+    assert "pid.c" in files
+    assert "other.c" in files
+
+    git_tools.revert(repo, set())
+    assert (repo / "pid.c").read_text(encoding="utf-8") == "float kp = 1.0f;\n"
+    assert (repo / "other.c").read_text(encoding="utf-8") == "old\n"
+    assert git_tools.tracked_changes(repo) == []

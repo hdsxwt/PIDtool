@@ -34,6 +34,11 @@ def is_repo(path: Path) -> bool:
     return code == 0 and out.strip() == "true"
 
 
+def has_head(path: Path) -> bool:
+    code, _ = run_git(["rev-parse", "--verify", "HEAD"], Path(path))
+    return code == 0
+
+
 def head_short(path: Path) -> str:
     code, out = run_git(["rev-parse", "--short", "HEAD"], Path(path))
     return out.strip() if code == 0 else ""
@@ -64,19 +69,19 @@ def untracked_files(path: Path) -> set[str]:
 
 
 def diff_text(path: Path, max_chars: int = 400_000) -> str:
-    code, out = run_git(["diff", "--"], Path(path))
+    code, out = run_git(["diff", "HEAD", "--"], Path(path))
     if code not in (0, 1):
         return out
     return out[:max_chars]
 
 
 def diff_stat(path: Path) -> str:
-    code, out = run_git(["diff", "--stat"], Path(path))
+    code, out = run_git(["diff", "HEAD", "--stat"], Path(path))
     return out.strip() if code in (0, 1) else out.strip()
 
 
 def changed_files(path: Path) -> list[str]:
-    code, out = run_git(["diff", "--name-only"], Path(path))
+    code, out = run_git(["diff", "HEAD", "--name-only"], Path(path))
     if code not in (0, 1):
         return []
     return [line for line in out.splitlines() if line.strip()]
@@ -84,10 +89,14 @@ def changed_files(path: Path) -> list[str]:
 
 def revert(workdir: Path, before_untracked: set[str]) -> list[str]:
     workdir = Path(workdir)
-    run_git(["checkout", "--", "."], workdir)
+    staged_new = [rel for status, rel in status_entries(workdir) if status.startswith("A")]
+    code, _ = run_git(["reset", "--hard", "HEAD"], workdir)
+    if code != 0:
+        run_git(["checkout", "--", "."], workdir)
     removed: list[str] = []
     root = workdir.resolve()
-    for rel in sorted(untracked_files(workdir) - set(before_untracked)):
+    candidates = set(staged_new) | (untracked_files(workdir) - set(before_untracked))
+    for rel in sorted(candidates):
         target = (workdir / rel).resolve()
         if target != root and root not in target.parents:
             continue
@@ -96,7 +105,7 @@ def revert(workdir: Path, before_untracked: set[str]) -> list[str]:
                 shutil.rmtree(target)
             elif target.exists():
                 target.unlink()
-            removed.append(rel)
         except OSError:
             continue
+        removed.append(rel)
     return removed

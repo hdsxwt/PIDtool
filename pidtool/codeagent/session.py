@@ -104,6 +104,8 @@ class CodeEditSession:
             return ["工作目录不存在"]
         if not git_tools.is_repo(workdir):
             return ["工作目录不是 git 仓库：无法启用 diff 审查与回滚保护"]
+        if not git_tools.has_head(workdir):
+            return ["git 仓库还没有任何提交：请先提交一次以启用 diff 审查与回滚保护"]
         tracked = git_tools.tracked_changes(workdir)
         if tracked:
             preview = "、".join(rel for _, rel in tracked[:5])

@@ -7,5 +7,6 @@ build/
 dist/
 *.spec
 .pidtool/
+session-*.md
 .coverage
 htmlcov/

@@ -242,6 +242,14 @@ def test_precheck_missing_directory(tmp_path):
     assert CodeEditSession.precheck(tmp_path / "nope") == ["工作目录不存在"]
 
 
+def test_precheck_requires_commit(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git_tools.run_git(["init"], repo)
+    problems = CodeEditSession.precheck(repo)
+    assert problems and "提交" in problems[0]
+
+
 def test_build_code_prompt_without_context():
     text = build_code_prompt("只改 pid.c", Path("C:/firmware"))
     assert "只改 pid.c" in text
